@@ -78,6 +78,33 @@ class AIConfigTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), original)
         self.assertEqual(sorted(p.name for p in self.root.iterdir()), ['.env', '.env.lock'])
 
+    def test_fsync_handle_is_writable_and_closed_before_replace(self):
+        fsync, replace = os.fsync, Path.replace
+        handles = []
+        def require_writable(fd):
+            # A zero-byte write catches a read-only descriptor on every OS.
+            os.write(fd, b'')
+            fsync(fd)
+            handles.append(fd)
+        def require_closed(source, destination):
+            self.assertTrue(handles)
+            with self.assertRaises(OSError): os.fstat(handles[-1])
+            return replace(source, destination)
+        with patch('llm.os.fsync', side_effect=require_writable), patch.object(
+                Path, 'replace', new=require_closed):
+            llm.save_config(self.values)
+        self.assertEqual(llm.configuration()['key'], 'fixture-key')
+
+    def test_failed_fsync_preserves_original_and_removes_temp(self):
+        self.path.write_text('LLM_API_KEY=old-key\n')
+        original = self.path.read_bytes()
+        with patch('llm.os.fsync', side_effect=OSError('sensitive diagnostic')):
+            with self.assertRaisesRegex(llm.AppError, '无法保存项目 .env') as error:
+                llm.save_config(self.values)
+        self.assertNotIn('sensitive diagnostic', str(error.exception))
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ['.env', '.env.lock'])
+
     def test_environment_priority_is_visible_and_not_persisted(self):
         with patch.dict(os.environ, {'OPENAI_API_KEY': 'env-secret', 'OPENAI_MODEL': 'env-model'}):
             result = llm.save_config(dict(self.values, key=''))

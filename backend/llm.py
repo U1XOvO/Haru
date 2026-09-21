@@ -100,7 +100,8 @@ def save_config(params):
             if values['key']: updates['LLM_API_KEY'] = values['key']
             for key, value in updates.items():
                 set_key(temp, key, value, quote_mode='always')
-            with temp.open('rb') as output: os.fsync(output.fileno())
+            # Windows FlushFileBuffers requires a handle opened for writing.
+            with temp.open('r+b') as output: os.fsync(output.fileno())
             temp.chmod(0o600)
             temp.replace(path)
     except (OSError, UnicodeError, portalocker.exceptions.LockException):

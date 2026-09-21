@@ -1,5 +1,6 @@
 """Stage boundaries, remedial gates, v1 preservation."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 import copy
 import json
 import sqlite3
@@ -133,7 +134,8 @@ class ProgressionTests(unittest.TestCase):
         self.app.close();self.app=Service(self.temp.name)
         backups=list((Path(self.temp.name)/'backups').glob('*.sqlite3'));self.assertEqual(len(backups),1)
         for t,rows in before.items():self.assertEqual(rows,[tuple(r) for r in self.app.db.execute(f'SELECT * FROM {t}')])
-        with sqlite3.connect(backups[0]) as db:
+        # A connection context manages transactions; closing releases the Windows file handle.
+        with closing(sqlite3.connect(backups[0])) as db:
             self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],0)
             self.assertEqual(db.execute('SELECT COUNT(*) FROM events').fetchone()[0],1)
         self.app.close();self.app=Service(self.temp.name)
