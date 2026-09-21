@@ -6,7 +6,7 @@ import platform
 import plistlib
 import shutil
 import sys
-from release_utils import version
+from app_version import version
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTENTS = ROOT / 'Haru.app/Contents'
@@ -14,7 +14,7 @@ INPUTS = (
     'native/Haru.swift', 'scripts/build_app.sh', 'scripts/build_icons.sh',
     'scripts/make_icon.swift', 'scripts/app_config.py', 'scripts/setup_env.sh',
     'scripts/uv.sh', 'pyproject.toml', 'uv.lock', '.python-version',
-    'scripts/release_utils.py',
+    'scripts/app_version.py',
 )
 
 
@@ -40,11 +40,11 @@ def is_current():
         return False
 
 
-def bundle_info(release_version):
+def bundle_info(app_version):
     return {'CFBundleName': 'Haru', 'CFBundleDisplayName': 'Haru 日语',
             'CFBundleIdentifier': 'local.haru.japanese', 'CFBundleExecutable': 'Haru',
             'CFBundlePackageType': 'APPL', 'CFBundleIconFile': 'Haru.icns',
-            'CFBundleShortVersionString': release_version, 'CFBundleVersion': release_version,
+            'CFBundleShortVersionString': app_version, 'CFBundleVersion': app_version,
             'LSMinimumSystemVersion': '14.0', 'NSHighResolutionCapable': True,
             'NSMicrophoneUsageDescription': '录制你的日语跟读并在本机回放。录音不会上传到云端。',
             'NSHumanReadableCopyright': 'Haru · Japanese Learner for Chinese Speakers'}

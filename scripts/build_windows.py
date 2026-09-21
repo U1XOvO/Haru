@@ -3,14 +3,14 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-from release_utils import windows_version
+from app_version import windows_version
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def inputs(root):
     files = [root / name for name in ('pyproject.toml', 'uv.lock',
-        'scripts/build_windows.py', 'scripts/haru_windows.spec', 'scripts/release_utils.py')]
+        'scripts/build_windows.py', 'scripts/haru_windows.spec', 'scripts/app_version.py')]
     for folder, pattern in [('backend', '*.py'), ('native', '*.py'), ('ui', '*'), ('data', '*.json')]:
         files.extend(path for path in (root / folder).rglob(pattern) if path.is_file())
     return {str(path.relative_to(root)): [path.stat().st_size, path.stat().st_mtime_ns]

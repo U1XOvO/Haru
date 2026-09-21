@@ -13,8 +13,6 @@ def resource_root():
 def storage_root():
     if not getattr(sys, 'frozen', False):
         return resource_root()
-    if sys.platform == 'darwin':
-        return Path.home() / 'Library/Application Support/Haru'
     # A locally built dist/Haru app keeps using this checkout's existing data.
     app = Path(sys.executable).resolve().parent
     project = app.parent.parent

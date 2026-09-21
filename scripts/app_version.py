@@ -1,4 +1,4 @@
-"""Shared release version and platform metadata; no credentials or file hashes."""
+"""Version metadata for locally built macOS and Windows apps."""
 from pathlib import Path
 import re
 import tomllib
@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def version(root=ROOT):
     value = tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version']
     if not re.fullmatch(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)', value):
-        raise ValueError('Release version must be MAJOR.MINOR.PATCH in pyproject.toml')
+        raise ValueError('App version must be MAJOR.MINOR.PATCH in pyproject.toml')
     return value
 
 

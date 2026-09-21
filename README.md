@@ -2,63 +2,46 @@
 
 面向中文母语学习者的 macOS / Windows 日语学习 App，从零基础开始，用中文讲解、日语朗读和日常练习逐步入门。
 
-## 下载安装（推荐）
+## 克隆并启动
 
-前往 [GitHub Releases](https://github.com/U1XOvO/Haru/releases)，选择与你的电脑匹配的 ZIP：
+先安装 Git，然后在终端运行：
 
-| 系统 | 安装包后缀 | 启动方式 |
+```sh
+git clone https://github.com/U1XOvO/Haru.git
+cd Haru
+```
+
+将项目放在准备长期保留的位置。首次运行需要联网，启动脚本会自动准备项目专用的 uv、Python 3.12 和锁定依赖，无需预先安装 Python。
+
+| 系统 | 启动入口 | 系统要求 |
 | --- | --- | --- |
-| Windows 10/11 x64 | `windows-x64.zip` | 完整解压，双击 `Haru/Haru.exe` |
-| macOS 14+，Apple Silicon | `macos-arm64.zip` | 解压，将 `Haru.app` 拖入「应用程序」 |
-| macOS 14+，Intel | `macos-x64.zip` | 解压，将 `Haru.app` 拖入「应用程序」 |
+| macOS 14+（Apple Silicon / Intel） | 双击 `start.command`，或运行 `bash start.command` | Apple 命令行工具；缺少时运行 `xcode-select --install`，安装完成后重试 |
+| Windows 10/11 x64 | 双击 `start.cmd`，或在 PowerShell 运行 `.\start.cmd` | [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)；缺少时安装官方 x64 Evergreen Runtime |
 
-Release 包内置运行环境，无需安装 Python、uv 或开发工具。Windows 需要 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)；不要只复制单个 `.exe`。若 Releases 尚无安装包，可以使用下面的源码启动方式。
+macOS 会自动构建并打开项目内的 `Haru.app`。Windows 首次会在本机构建 `dist\Haru\Haru.exe` 并创建项目内的 `Haru.lnk` 快捷方式，可能需要几分钟；完成后自动打开 App，日常使用快捷方式即可，不显示控制台窗口。
 
-当前 Windows 包未做发布者签名，macOS 包使用临时签名、尚未公证，首次运行可能显示系统来源提示。请核对仓库与下载来源后按系统提示打开。
+已安装 Python 的系统也可以运行 `python start.py`，它会自动识别 macOS / Windows 并选择对应启动流程。Linux 和 Windows ARM64 暂不支持。
 
-启动后，在「偏好设置 → AI 连接」填写服务商的 API 地址、密钥和模型 ID，点击「保存并测试连接」。需要兼容 OpenAI 接口、支持 JSON 输出的模型。打开「每日课程」，选择第一课，点击「AI 创建课程」开始学习。
+### 首次使用
 
-### 数据与更新
+1. 在「偏好设置 → AI 连接」填写服务商的 API 地址、密钥和模型 ID，点击「保存并测试连接」。需使用兼容 OpenAI 接口、支持 JSON 输出的模型服务。
+2. 打开「每日课程」，选择第一课，点击「AI 创建课程」开始学习。
 
-| 运行方式 | 配置 | 学习记录与录音 |
-| --- | --- | --- |
-| Windows Release | `%LOCALAPPDATA%\Haru\.env` | `%LOCALAPPDATA%\Haru\runtime\` |
-| macOS Release | `~/Library/Application Support/Haru/.env` | `~/Library/Application Support/Haru/runtime/` |
-| 源码启动、本机从源码生成的 Windows App | 项目 `.env` | 项目 `runtime/` |
+### 更新与本地数据
 
-更新 Release 时先退出 App，再替换完整的应用文件夹；不要删除上述用户数据目录。macOS 从源码生成的 `Haru.app` 与 Release 包是两种构建方式，前者仍依赖项目目录。
-
-**从源码版迁移记录**：先退出两种版本并备份项目 `.env` 和整个 `runtime/`，再将它们复制到对应 Release 的 Haru 用户数据目录。仅在目标位置尚无配置与记录时复制；如两边已有数据，保留各自备份，不直接覆盖数据库。跨系统迁移的录音格式可能不同。
-
-## 从源码运行
-
-1. `git clone` 或下载并解压项目，放到准备长期保留的位置。
-2. 根据系统双击启动入口；首次运行需要联网，自动准备项目专用的 uv、Python 3.12 和锁定依赖，无需预先安装 Python。
-   - **macOS 14+**：双击 `start.command`。若提示缺少 Apple 命令行工具，在终端执行 `xcode-select --install`，安装后重试。
-   - **Windows 10/11（x64）**：首次双击 `start.cmd`，自动构建并打开独立的 **Haru App**（首次打包需要几分钟）。之后双击项目内的 **Haru 快捷方式**或 `dist\Haru\Haru.exe`，无需打开 Python 或命令行。需要 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)；若提示缺失，请安装官方 x64 Evergreen Runtime 后重试。
-3. 在「偏好设置 → AI 连接」填写服务商的 API 地址、密钥和模型 ID，点击「保存并测试连接」。需使用兼容 OpenAI 接口、支持 JSON 输出的模型服务。
-4. 打开「每日课程」，选择第一课，点击「AI 创建课程」开始学习。
-
-若无法双击启动，macOS 在项目目录运行 `bash start.command`，Windows 在 PowerShell 中运行 `.\start.cmd`。已安装 Python 的系统也可以统一运行 `python start.py`，它会自动识别 macOS / Windows 并选择对应启动流程。Linux 和 Windows ARM64 暂不支持。
-
-macOS 以后仍使用启动入口打开；Windows 日常使用 Haru 快捷方式，更新代码后关闭 App 并重新运行 `start.cmd`，脚本会按需重新打包。移动项目后请重新运行入口以更新路径。跨系统请重新克隆，不要复制 `.venv`、`.tools` 或已构建的 App。本机从项目构建的 App 继续使用项目 `.env` 和 `runtime/`，均不会提交到 Git。
-
-### 本机构建 Windows App
-
-- App 内置 Python 和所需依赖，使用 Haru 名称与图标，日常启动没有控制台窗口。首次构建时的终端会在 App 启动后退出。
-- 生成位置为 `dist\Haru\Haru.exe`；可以把项目中的 `Haru.lnk` 快捷方式复制到桌面。
-- 分享给其他 Windows x64 电脑时，复制整个 `dist\Haru` 文件夹，不能只复制 `.exe`。接收方无需安装 Python，但仍需 WebView2 Runtime。
-- 独立分发的 App 将配置和学习记录保存在 `%LOCALAPPDATA%\Haru`；打包不会包含你的密钥或学习记录。保留此目录即可在替换 App 文件夹时保留记录。
-- 仅准备环境和构建、不打开 App：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup_windows.ps1 -SetupOnly`。Windows App 必须在 Windows 上构建。
-
-双平台 Release 的构建命令、版本管理与 GitHub 发布步骤见 [RELEASING.md](RELEASING.md)。源码提交、Pull Request 和手动触发 Actions 都会构建三个平台包；推送匹配版本的 `v*` 标签后，检查全部通过才创建 Draft Release。
+- 配置保存在项目 `.env`，学习记录与录音保存在项目 `runtime/`，均不会提交到 Git；备份时保留这两处。
+- 仓库仅保留启动、构建、界面、后端和内置学习数据所需文件；`.gitignore` 使用逐文件白名单，新增运行依赖时需同步更新白名单。生成的 App、环境、缓存、测试和开发资料不上传。
+- 更新代码前退出 App，在项目目录执行 `git pull`，然后重新运行 `start.command` 或 `start.cmd`。启动脚本会按需重新构建本机 App。
+- 移动项目后请重新运行启动入口以更新路径。App 和快捷方式应与项目一起保留。
+- 跨系统请重新克隆，不要复制 `.venv`、`.tools` 或已构建的 App。
+- Windows 仅准备环境和构建、不打开 App：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup_windows.ps1 -SetupOnly`。
+- 启动脚本使用项目内的环境，不修改全局 PATH；Windows 执行策略参数仅对当前 PowerShell 进程生效。首次准备失败时查看终端错误，修复后重新运行启动入口。
 
 ### Windows 语音与录音
 
 - 日语朗读使用 Windows 桌面语音引擎；若提示无可用日语语音，请在系统语言/语音设置中添加日语语音包，完成后重启应用。可用音色取决于系统安装的桌面语音。
 - 跟读录音需要开启「设置 → 隐私和安全性 → 麦克风 → 允许桌面应用访问麦克风」。录音最长 60 秒，保存为 `runtime/speaking-latest.wav`，不会上传。
 - 导入的 MP3/M4A/WAV 使用系统解码器播放；不支持的编码会显示错误，可改用 WAV 文件。
-- 启动脚本只对当前 PowerShell 进程使用执行策略参数，不修改系统全局策略或 PATH。首次环境准备失败时终端会保留错误信息，修复网络或运行库后再次启动即可。
 
 ## 可以学什么
 
