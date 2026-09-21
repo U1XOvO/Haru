@@ -12,6 +12,7 @@ import uuid
 import webbrowser
 
 from desktop_bridge import Backend, DesktopError, ROOT
+from app_paths import storage_root
 
 ALLOWED_HOSTS = {'www.jpf.go.jp', 'www.jlpt.jp', 'bunpro.jp', 'www.irodori.jpf.go.jp'}
 
@@ -26,7 +27,7 @@ def is_app_url(url, index=None):
 def prepare_ui():
     # pywebview's promise callbacks use eval. Limit this CSP adjustment to the
     # generated Windows copy, preserving the stricter macOS/preview document.
-    folder = ROOT / 'build/windows-ui'
+    folder = (storage_root() if getattr(sys, 'frozen', False) else ROOT) / 'build/windows-ui'
     shutil.copytree(ROOT / 'ui', folder, dirs_exist_ok=True)
     index = folder / 'index.html'
     html = index.read_text(encoding='utf-8')
@@ -177,7 +178,7 @@ def main():
         return 1
     import webview
     from windows_audio import WindowsAudio
-    host = Host(os.environ.get('HARU_DATA_DIR', ROOT / 'runtime'), prepare_ui())
+    host = Host(os.environ.get('HARU_DATA_DIR', storage_root() / 'runtime'), prepare_ui())
     try:
         host.audio = WindowsAudio(host.data_dir, host._recording_stopped)
         webview.settings['ALLOW_FILE_URLS'] = False
@@ -189,7 +190,8 @@ def main():
         host.window.events.initialized += host._initialized
         host.window.events.closing += host._close
         webview.start(gui='edgechromium', http_server=False, user_agent='HaruDesktop/Windows',
-                      storage_path=str(host.data_dir / 'webview'), private_mode=True)
+                      storage_path=str(host.data_dir / 'webview'), private_mode=True,
+                      icon=str(ROOT / 'ui/Haru.ico') if (ROOT / 'ui/Haru.ico').is_file() else None)
         return 0 if host.renderer_ready else 1
     except Exception:
         print('Haru could not open WebView2. Install Microsoft Edge WebView2 Runtime (x64), '

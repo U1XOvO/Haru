@@ -44,8 +44,8 @@ KANA = [
 
 # Original, versioned teaching material kept separately from the topic catalog.
 import json
-from pathlib import Path
-SEEDS = json.loads((Path(__file__).resolve().parents[1] / 'data/builtin_lessons.json').read_text(encoding='utf-8'))
+from app_paths import resource_root
+SEEDS = json.loads((resource_root() / 'data/builtin_lessons.json').read_text(encoding='utf-8'))
 
 CARDS = [
  dict(word='こんにちは',reading='こんにちは',romaji='konnichiwa',meaning='你好（白天问候）',example='こんにちは。',translation='你好。',mnemonic='把它与白天见面的场景绑定记忆；结尾は读wa，不要读ha。'),

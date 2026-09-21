@@ -9,6 +9,7 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
     var web: WKWebView!
     var root: URL!
     var python: String = ""
+    var bundledBackend = false
     var dataDir: URL!
     let speech = AVSpeechSynthesizer()
     var recorder: AVAudioRecorder?
@@ -20,6 +21,8 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
     var shuttingDown = false
     let queue = DispatchQueue(label: "haru.backend", attributes: .concurrent)
     let backendDeadlineSeconds: TimeInterval = 600
+    var smokeTimer: Timer?
+    var smokeRoot: URL?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let iconURL = Bundle.main.url(forResource: "Haru", withExtension: "icns"),
@@ -28,14 +31,24 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
         }
         guard let resource = Bundle.main.resourceURL,
               let configData = try? Data(contentsOf: resource.appendingPathComponent("runtime.json")),
-              let config = try? JSONSerialization.jsonObject(with: configData) as? [String:String],
-              let rootPath = config["root"], let pythonPath = config["python"] else {
-            fatalAlert("请在项目目录运行 scripts/build_app.sh 重新构建应用。"); return
+              let config = try? JSONSerialization.jsonObject(with: configData) as? [String:String] else {
+            fatalAlert("应用文件不完整，请重新下载 Haru，或从源码重新构建。"); return
         }
-        root = URL(fileURLWithPath: rootPath, isDirectory: true)
-        python = pythonPath
-        dataDir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["HARU_DATA_DIR"] ?? root.appendingPathComponent("runtime").path, isDirectory: true)
-        guard FileManager.default.isExecutableFile(atPath: python) else {fatalAlert("找不到项目 Python 环境。请关闭应用并重新运行 start.command 自动修复。"); return}
+        let storage: URL
+        if config["mode"] == "bundled" {
+            bundledBackend = true
+            root = resource
+            python = resource.appendingPathComponent("backend-runtime/HaruBackend").path
+            storage = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Haru/runtime", isDirectory: true)
+        } else if let rootPath = config["root"], let pythonPath = config["python"] {
+            root = URL(fileURLWithPath: rootPath, isDirectory: true)
+            python = pythonPath
+            storage = root.appendingPathComponent("runtime", isDirectory: true)
+        } else {
+            fatalAlert("应用运行配置无效，请重新下载或构建 Haru。"); return
+        }
+        dataDir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["HARU_DATA_DIR"] ?? storage.path, isDirectory: true)
+        guard FileManager.default.isExecutableFile(atPath: python) else {fatalAlert("找不到 Haru 运行组件。请重新下载完整应用；源码版本可重新运行 start.command 修复。"); return}
         try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
         let menu = NSMenu(); let appMenu = NSMenu(); let appItem = NSMenuItem()
         appItem.submenu = appMenu; menu.addItem(appItem)
@@ -56,13 +69,55 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
         window.backgroundColor = NSColor(calibratedRed:0.97,green:0.98,blue:0.99,alpha:1)
         window.contentView = web
         window.center(); window.makeKeyAndOrderFront(nil)
+        let args = CommandLine.arguments
+        if args.count == 3 && args[1] == "--smoke-test" {
+            startSmoke(report: URL(fileURLWithPath: args[2])); return
+        }
         let index = root.appendingPathComponent("ui/index.html")
         web.loadFileURL(index,allowingReadAccessTo:root.appendingPathComponent("ui",isDirectory:true))
         NSApp.activate(ignoringOtherApps:true)
     }
+    // Explicit CI mode exercises the real native IPC without loading AI-enabled home content.
+    func startSmoke(report: URL) {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("haru-smoke-" + UUID().uuidString, isDirectory: true)
+        smokeRoot = folder
+        do {
+            try FileManager.default.createDirectory(at: folder.appendingPathComponent("ui"), withIntermediateDirectories: true)
+            dataDir = folder.appendingPathComponent("runtime", isDirectory: true)
+            try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
+            let html = """
+            <html><body>Haru offline smoke<script>
+            window.smokeResult=null;
+            window.haruResolve=(id,r)=>{window.smokeResult=!!(r.ok&&r.data.length);};
+            window.webkit.messageHandlers.haru.postMessage({id:1,action:'card_seed',params:{}});
+            </script></body></html>
+            """
+            try html.write(to: folder.appendingPathComponent("ui/index.html"), atomically: true, encoding: .utf8)
+            // The packaged backend resolves its own resources independently of this test page.
+            guard bundledBackend else { throw NSError(domain: "HaruSmoke", code: 1) }
+            root = folder
+            web.loadFileURL(folder.appendingPathComponent("ui/index.html"), allowingReadAccessTo: folder.appendingPathComponent("ui"))
+            var polls = 0
+            smokeTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
+                polls += 1
+                if polls > 120 { self.finishSmoke(false, report: report); return }
+                self.web.evaluateJavaScript("window.smokeResult") { value, _ in
+                    if let ok = value as? Bool { self.finishSmoke(ok, report: report) }
+                }
+            }
+        } catch { finishSmoke(false, report: report) }
+    }
+    func finishSmoke(_ ok: Bool, report: URL) {
+        smokeTimer?.invalidate()
+        if let data = try? JSONSerialization.data(withJSONObject: ["ok": ok]) {
+            try? data.write(to: report, options: .atomic)
+        }
+        NSApp.terminate(nil)
+    }
     func fatalAlert(_ message:String) {let a=NSAlert(); a.messageText="Haru 暂时无法启动"; a.informativeText=message; a.runModal(); NSApp.terminate(nil)}
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool {true}
     func applicationWillTerminate(_ notification: Notification) {
+        smokeTimer?.invalidate()
         recorder?.stop(); player?.stop(); speech.stopSpeaking(at:.immediate)
         processLock.lock()
         shuttingDown = true
@@ -78,6 +133,7 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
         for process in children where process.isRunning {
             _ = kill(process.processIdentifier, SIGKILL)
         }
+        if let folder = smokeRoot { try? FileManager.default.removeItem(at: folder) }
     }
     func reply(_ id:Int,_ result:[String:Any]) {
         guard let data=try? JSONSerialization.data(withJSONObject:result,options:[.fragmentsAllowed]),let json=String(data:data,encoding:.utf8) else{return}
@@ -185,9 +241,9 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
     func runBackend(_ id:Int,_ action:String,_ params:[String:Any]) {
         let actions:Set<String>=["config_get","config_save","grammar_catalog","grammar_detail","grammar_mark","grammar_practice","study_catalog","study_import","study_generate","study_generation_start","study_generation_step","study_generation_status","study_generation_cancel","study_delete","study_start","study_attempt","study_save","study_history","study_mistakes","study_retry","study_summary","study_image","annotate","dictionary","dictionary_add","encounter","knowledge","chat_state","chat_start","chat_finish","chat_memory","chat_stream","chat_cancel","daily_word","daily_word_add","bootstrap","profile","lesson","grade","cards","card_create","card_random","card_seed","review","chat","chat_history","decode","quiz","immersion","export","ping","history","curriculum","stage_assessment","remedial"]
         guard actions.contains(action),let input=try? JSONSerialization.data(withJSONObject:["action":action,"params":params]),input.count<=100000 else{fail(id,"操作无效或输入过长。");return}
-        let interpreter=python;let project=root!;let storage=dataDir!
+        let interpreter=python;let project=root!;let storage=dataDir!;let bundled=bundledBackend
         queue.async {
-            let process=Process(); process.executableURL=URL(fileURLWithPath:interpreter); process.arguments=[project.appendingPathComponent("backend/bridge.py").path]; process.currentDirectoryURL=project
+            let process=Process(); process.executableURL=URL(fileURLWithPath:interpreter); process.arguments=bundled ? [] : [project.appendingPathComponent("backend/bridge.py").path]; process.currentDirectoryURL=project
             var env=ProcessInfo.processInfo.environment;env["HARU_DATA_DIR"]=storage.path; env["PYTHONDONTWRITEBYTECODE"]="1";process.environment=env
             let stdin=Pipe();let stdout=Pipe();process.standardInput=stdin;process.standardOutput=stdout;process.standardError=FileHandle.nullDevice
             do {

@@ -6,6 +6,7 @@ import platform
 import plistlib
 import shutil
 import sys
+from release_utils import version
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTENTS = ROOT / 'Haru.app/Contents'
@@ -13,6 +14,7 @@ INPUTS = (
     'native/Haru.swift', 'scripts/build_app.sh', 'scripts/build_icons.sh',
     'scripts/make_icon.swift', 'scripts/app_config.py', 'scripts/setup_env.sh',
     'scripts/uv.sh', 'pyproject.toml', 'uv.lock', '.python-version',
+    'scripts/release_utils.py',
 )
 
 
@@ -38,14 +40,18 @@ def is_current():
         return False
 
 
-def write_config():
-    info = {'CFBundleName': 'Haru', 'CFBundleDisplayName': 'Haru 日语',
+def bundle_info(release_version):
+    return {'CFBundleName': 'Haru', 'CFBundleDisplayName': 'Haru 日语',
             'CFBundleIdentifier': 'local.haru.japanese', 'CFBundleExecutable': 'Haru',
             'CFBundlePackageType': 'APPL', 'CFBundleIconFile': 'Haru.icns',
-            'CFBundleShortVersionString': '1.0.0', 'CFBundleVersion': '1',
+            'CFBundleShortVersionString': release_version, 'CFBundleVersion': release_version,
             'LSMinimumSystemVersion': '14.0', 'NSHighResolutionCapable': True,
             'NSMicrophoneUsageDescription': '录制你的日语跟读并在本机回放。录音不会上传到云端。',
             'NSHumanReadableCopyright': 'Haru · Japanese Learner for Chinese Speakers'}
+
+
+def write_config():
+    info = bundle_info(version(ROOT))
     for path, data in ((CONTENTS / 'Info.plist', plistlib.dumps(info)),
                        (CONTENTS / 'Resources/runtime.json', json.dumps(current_config()).encode())):
         temporary = path.with_suffix(path.suffix + '.tmp')

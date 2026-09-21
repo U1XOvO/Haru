@@ -6,7 +6,7 @@ counts. No official question text or answer is sent to the generation model.
 """
 import copy
 import json
-from pathlib import Path
+from app_paths import resource_root
 
 from llm import AppError
 
@@ -126,7 +126,7 @@ def get_blueprint(level, papers=None):
     if level not in LEVELS:
         raise AppError('请选择 N5 至 N1 的等级。')
     if papers is None:
-        path = Path(__file__).resolve().parents[1] / 'data' / 'study' / 'papers.json'
+        path = resource_root() / 'data' / 'study' / 'papers.json'
         papers = json.loads(path.read_text(encoding='utf-8'))
     source_id = 'official-2018-' + level
     paper = next((p for p in papers if p.get('id') == source_id), None)
@@ -174,6 +174,6 @@ def get_blueprint(level, papers=None):
 
 def get_blueprints():
     """Return all level templates, reading the local source only once."""
-    path = Path(__file__).resolve().parents[1] / 'data' / 'study' / 'papers.json'
+    path = resource_root() / 'data' / 'study' / 'papers.json'
     papers = json.loads(path.read_text(encoding='utf-8'))
     return [get_blueprint(level, papers) for level in LEVELS]

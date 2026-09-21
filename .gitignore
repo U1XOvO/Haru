@@ -24,6 +24,7 @@ secrets*
 /build/
 /dist/
 /Haru.app/
+/Haru.lnk
 /.tools/
 /.cache/
 .venv/
@@ -45,6 +46,4 @@ Thumbs.db
 Desktop.ini
 .idea/
 .vscode/
-/tests/
 /docs/
-/.github/

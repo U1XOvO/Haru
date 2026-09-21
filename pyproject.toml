@@ -13,3 +13,9 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+[dependency-groups]
+build = [
+    "pyinstaller>=6.16,<7",
+    "pillow>=11,<13 ; sys_platform == 'win32'",
+]

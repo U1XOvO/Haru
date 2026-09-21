@@ -6,7 +6,10 @@ import subprocess
 import sys
 import threading
 
-ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
+from app_paths import resource_root
+
+ROOT = resource_root()
 BACKEND_ACTIONS = frozenset('''config_get config_save grammar_catalog grammar_detail grammar_mark
 grammar_practice study_catalog study_import study_generate study_generation_start study_generation_step
 study_generation_status study_generation_cancel study_delete study_start study_attempt study_save
@@ -67,7 +70,16 @@ class Backend:
                 raise DesktopError('应用正在退出。')
             if action == 'chat_stream' and token in self.chats:
                 raise DesktopError('请求已在处理中。')
-            process = subprocess.Popen([sys.executable, '-u', str(self.bridge)], cwd=ROOT, env=env,
+            if getattr(sys, 'frozen', False):
+                command = [str(Path(sys.executable).with_name('HaruBackend.exe'))]
+            else:
+                # pythonw has no standard streams; keep IPC on the console interpreter
+                # with CREATE_NO_WINDOW and explicit pipes instead.
+                python = Path(sys.executable)
+                if python.name.lower() == 'pythonw.exe':
+                    python = python.with_name('python.exe')
+                command = [str(python), '-u', str(self.bridge)]
+            process = subprocess.Popen(command, cwd=ROOT, env=env,
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                        stderr=subprocess.DEVNULL,
                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

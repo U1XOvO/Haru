@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from curriculum import TOPICS, KANA, SEEDS, CARDS
 from llm import AppError, ROOT, generate, public_config, editable_config, save_config
+from app_paths import storage_root
 from learning import Learning, pronunciation
 from conversation import Conversation
 from progression import stage_info, stage_for, course_spec, stage_courses
@@ -73,7 +74,7 @@ def visible_test(obj):
 
 class Service(Learning, Conversation, Study):
     def __init__(self, data_dir=None):
-        self.dir=Path(data_dir or os.environ.get('HARU_DATA_DIR') or ROOT/'runtime')
+        self.dir=Path(data_dir or os.environ.get('HARU_DATA_DIR') or storage_root()/'runtime')
         self.dir.mkdir(parents=True,exist_ok=True)
         self.db=sqlite3.connect(self.dir/'haru.sqlite3',timeout=15)
         self.db.row_factory=sqlite3.Row

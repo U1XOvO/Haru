@@ -9,14 +9,20 @@ import urllib.parse
 from pathlib import Path
 
 from dotenv import dotenv_values, set_key
+from app_paths import resource_root, storage_root
+import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = resource_root()
 class AppError(Exception): pass
+
+
+def config_root():
+    return storage_root() if getattr(sys, 'frozen', False) else ROOT
 
 
 def configuration():
     # Parse without mutating os.environ or expanding ${...} inside credentials.
-    env = dotenv_values(ROOT / '.env', encoding='utf-8-sig', interpolate=False)
+    env = dotenv_values(config_root() / '.env', encoding='utf-8-sig', interpolate=False)
     def get(*keys, default=''):
         # Process-level aliases take priority, even over a different .env alias.
         for source in (os.environ, {k: v for k, v in env.items() if k not in os.environ}):
@@ -77,15 +83,17 @@ def save_config(params):
     timeout = params.get('timeout', 60)
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or not 10 <= timeout <= 90:
         raise AppError('超时时间应在 10 到 90 秒之间。')
-    path = ROOT / '.env'
+    folder = config_root()
+    path = folder / '.env'
     temp = None
     try:
         # IPC requests run in separate processes; serialize the read/modify/replace.
-        with portalocker.Lock(ROOT / '.env.lock', mode='a', timeout=15):
+        folder.mkdir(parents=True, exist_ok=True)
+        with portalocker.Lock(folder / '.env.lock', mode='a', timeout=15):
             if not values['key'] and not configuration()['key']:
                 raise AppError('请填写 API 密钥。')
             original = path.read_text(encoding='utf-8-sig') if path.exists() else ''
-            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', prefix='.env.', dir=ROOT, delete=False) as output:
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', prefix='.env.', dir=folder, delete=False) as output:
                 temp = Path(output.name)
                 output.write(original)
             updates = {'LLM_BASE_URL': values['base'].rstrip('/'), 'LLM_MODEL_ID': values['model'], 'LLM_TIMEOUT': str(timeout)}
