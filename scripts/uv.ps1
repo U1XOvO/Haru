@@ -2,6 +2,8 @@
 $ErrorActionPreference = 'Stop'
 $ProjectDir = Split-Path -Parent $PSScriptRoot
 $UvVersion = '0.12.15'
+# uv --version may append build metadata in parentheses.
+$UvVersionPattern = '^uv ' + [regex]::Escape($UvVersion) + '(?:\s+\([^\r\n]*\))?\s*$'
 $UvDir = Join-Path $ProjectDir '.tools\uv'
 $UvBin = Join-Path $UvDir 'uv.exe'
 try {
@@ -9,7 +11,7 @@ try {
     if (-not $Architecture) { $Architecture = $env:PROCESSOR_ARCHITECTURE }
     if ($Architecture -ne 'AMD64') { throw 'Haru Windows currently requires x64 Windows 10/11.' }
     $CurrentVersion = if (Test-Path $UvBin) { & $UvBin --version } else { '' }
-    if ($CurrentVersion -ne "uv $UvVersion") {
+    if ($CurrentVersion -notmatch $UvVersionPattern -or $LASTEXITCODE -ne 0) {
         Write-Host "Preparing project-local uv $UvVersion (internet required)..."
         New-Item -ItemType Directory -Force -Path $UvDir | Out-Null
         $Installer = Join-Path ([IO.Path]::GetTempPath()) ("haru-uv-" + [guid]::NewGuid() + '.ps1')
@@ -31,7 +33,10 @@ try {
             Remove-Item -LiteralPath $Installer -Force -ErrorAction SilentlyContinue
         }
         if (-not (Test-Path $UvBin)) { throw 'uv.exe was not installed.' }
-        if ((& $UvBin --version) -ne "uv $UvVersion") { throw 'Unexpected uv version.' }
+        $CurrentVersion = & $UvBin --version
+        if ($CurrentVersion -notmatch $UvVersionPattern -or $LASTEXITCODE -ne 0) {
+            throw "Unexpected uv version. Expected uv $UvVersion; received '$CurrentVersion' (exit code $LASTEXITCODE)."
+        }
     }
     $env:UV_CACHE_DIR = Join-Path $ProjectDir '.cache\uv'
     $env:UV_PYTHON_INSTALL_DIR = Join-Path $ProjectDir '.tools\python'
