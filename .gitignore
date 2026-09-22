@@ -78,6 +78,7 @@
 !/scripts/release_feed.py
 !/scripts/test_bundle.py
 !/scripts/test_windows_install.py
+!/scripts/test_update_tools.py
 !/scripts/signing_setup.py
 !/tests/test_distribution.py
 !/tests/test_release_ui.js

@@ -99,6 +99,8 @@ jobs:
           else
             uv run --no-sync python scripts/build_release.py
           fi
+      - name: Validate upstream update signatures with disposable keys
+        run: uv run --no-sync python scripts/test_update_tools.py
       - name: Test relocated bundle and real desktop IPC
         run: |
           if [ "$RUNNER_OS" = Windows ]; then
