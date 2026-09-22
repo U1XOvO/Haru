@@ -13,6 +13,11 @@ def main():
         raw=sys.stdin.buffer.read(100_001)
         if len(raw)>100_000: raise AppError('请求过大。')
         req=json.loads(raw)
+        if req.get('action') in {'import_legacy', 'prepare_update', 'recover_storage'}:
+            from maintenance import dispatch
+            out = {'ok': True, 'data': dispatch(req['action'], req.get('params', {}))}
+            print(json.dumps(out, ensure_ascii=False))
+            return
         app=Service()
         if req['action']=='chat_stream':
             def emit(event): print(json.dumps(event,ensure_ascii=False),flush=True)

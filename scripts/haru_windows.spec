@@ -1,11 +1,20 @@
 # Build on Windows: the windowed GUI and console IPC worker share one runtime.
 from pathlib import Path
+import os
 
 root = Path(SPECPATH).parent
 paths = [str(root / 'native'), str(root / 'backend')]
 icon = str(root / 'build/windows/Haru.ico')
+resources = Path(os.environ.get('HARU_RELEASE_RESOURCES', root))
+extra_data = []
+extra_binaries = []
+if os.environ.get('HARU_RELEASE_METADATA'):
+    extra_data.append((os.environ['HARU_RELEASE_METADATA'], '.'))
+    extra_binaries.append((os.environ['HARU_WINSPARKLE_DLL'], '.'))
+else:
+    extra_data.append((str(root / 'pyproject.toml'), '.'))
 gui = Analysis([str(root / 'native/windows_entry.py')], pathex=paths,
-    datas=[(str(root / 'ui'), 'ui'), (str(root / 'data'), 'data'), (icon, 'ui')],
+    datas=[(str(resources / 'ui'), 'ui'), (str(resources / 'data'), 'data'), (icon, 'ui')] + extra_data, binaries=extra_binaries,
     hiddenimports=['webview.platforms.winforms', 'webview.platforms.edgechromium'],
     excludes=['tkinter', 'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'webview.platforms.cef'])
 backend = Analysis([str(root / 'backend/bridge.py')], pathex=paths)

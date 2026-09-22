@@ -2,6 +2,16 @@
 
 面向中文母语学习者的 macOS / Windows 日语学习 App，从零基础开始，用中文讲解、日语朗读和日常练习逐步入门。
 
+## 安装包与应用内更新
+
+发布后的安装包在 [GitHub Releases](https://github.com/U1XOvO/Haru/releases) 下载。Windows 使用 x64 安装程序；macOS 根据芯片选择 arm64 或 x64 DMG，将 Haru 拖入 Applications。安装包不需要 Git、Python 或开发工具；Windows 仍需要 WebView2 Runtime 和系统日语语音。
+
+在「偏好设置 → 版本与更新」查看版本、检查更新或开启自动检查。已配置更新密钥的安装包会验证更新签名，安装前备份学习数据库与配置；录音、生成任务或考试未结束时暂缓安装。测试版与正式版使用独立更新通道，未配置更新密钥的本地测试包使用手动更新。
+
+安装包的数据位于 Windows 的 `%LOCALAPPDATA%\Haru` 或 macOS 的 `~/Library/Application Support/Haru`，不会随程序更新或默认卸载删除。源码版用户可在首次使用的空白安装中选择「从旧版导入」，退出旧版后选择原仓库目录，完成后重新打开应用；原目录会保留。
+
+构建、签名、发布及验收说明见 [RELEASING.md](RELEASING.md)。下面的源码启动方式仍然可用。
+
 ## 克隆并启动
 
 先安装 Git，然后在终端运行：

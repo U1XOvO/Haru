@@ -1,0 +1,205 @@
+name: Desktop installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      signed:
+        description: Build signed release installers (requires signing secrets)
+        type: boolean
+        default: false
+      updates:
+        description: Enable signed preview updates (Ed25519 secrets required, no publisher certificate required)
+        type: boolean
+        default: true
+      publish:
+        description: Publish all installers and their channel update feed
+        type: boolean
+        default: false
+  push:
+    tags: ['v[0-9]*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            platform: windows-x64
+          - runner: macos-15
+            platform: macos-arm64
+          - runner: macos-15-intel
+            platform: macos-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      SIGNED: ${{ github.event_name == 'push' || inputs.signed }}
+      UPDATES: ${{ github.event_name == 'push' || inputs.signed || inputs.updates }}
+      PYTHONUTF8: '1'
+      PYINSTALLER_CONFIG_DIR: ${{ github.workspace }}/.cache/pyinstaller
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.15'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install locked build environment
+        run: uv sync --locked --group build
+      - name: Validate tagged version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          uv run --no-sync python -c 'import os,tomllib; from pathlib import Path; v=tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]; assert os.environ.get("GITHUB_REF_TYPE")!="tag" or os.environ["TAG"]=="v"+v'
+      - name: Select release tag
+        run: |
+          uv run --no-sync python - <<'PYCODE'
+          import os,tomllib
+          from pathlib import Path
+          version=tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
+          with Path(os.environ['GITHUB_ENV']).open('a') as output:
+              output.write('HARU_RELEASE_TAG=v'+version+('' if os.environ['SIGNED']=='true' else '-preview.'+os.environ['GITHUB_RUN_NUMBER'])+'\n')
+          PYCODE
+      - name: Test storage, recovery and update guards
+        run: |
+          uv run --no-sync python -m unittest discover -s tests -v
+          node tests/test_release_ui.js
+      - name: Configure signing credentials
+        if: env.SIGNED == 'true'
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          WINDOWS_CERTIFICATE_PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: uv run --no-sync python scripts/signing_setup.py
+      - name: Build installer
+        env:
+          HARU_UPDATE_PUBLIC_KEY: ${{ secrets.HARU_UPDATE_PUBLIC_KEY }}
+        run: |
+          if [ "$SIGNED" = true ]; then
+            uv run --no-sync python scripts/build_release.py --signed
+          elif [ "$UPDATES" = true ]; then
+            uv run --no-sync python scripts/build_release.py --updates
+          else
+            uv run --no-sync python scripts/build_release.py
+          fi
+      - name: Test relocated bundle and real desktop IPC
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            uv run --no-sync python scripts/test_bundle.py dist/Haru --gui
+          else
+            uv run --no-sync python scripts/test_bundle.py build/release/Haru.app --gui
+          fi
+      - name: Sign update payload
+        if: env.UPDATES == 'true'
+        env:
+          HARU_UPDATE_PRIVATE_KEY: ${{ secrets.HARU_UPDATE_PRIVATE_KEY }}
+        run: uv run --no-sync python scripts/sign_release.py
+      - name: Test Windows installation, repair and retained data
+        if: runner.os == 'Windows'
+        run: uv run --no-sync python scripts/test_windows_install.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.platform }}
+          path: dist/installers/*
+          if-no-files-found: error
+      - name: Remove ephemeral signing material
+        if: always() && env.SIGNED == 'true'
+        run: uv run --no-sync python scripts/signing_setup.py cleanup
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: haru-update-feed-publication
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    env:
+      UPDATES: ${{ github.event_name == 'push' || inputs.signed || inputs.updates }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.15'
+      - run: uv sync --locked --group build
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          path: artifacts
+          merge-multiple: true
+      - name: Prepare release metadata
+        env:
+          SIGNED: ${{ github.event_name == 'push' || inputs.signed }}
+        run: |
+          python - <<'PY'
+          import os,tomllib
+          from pathlib import Path
+          version=tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
+          with Path(os.environ['GITHUB_ENV']).open('a') as output:
+              output.write('VERSION='+version+'\n')
+              output.write('TAG=v'+version+('' if os.environ['SIGNED']=='true' else '-preview.'+os.environ['GITHUB_RUN_NUMBER'])+'\n')
+          Path('notes.txt').write_text('Haru '+version+'\n\n'+('Standalone installers with verified in-app updates.' if os.environ['SIGNED']=='true' else 'Preview for testing. macOS Developer ID notarization and Windows publisher signing are not included. When enabled, update payloads are independently verified with Ed25519 signatures.'))
+          PY
+      - name: Preserve the other update channel
+        if: env.UPDATES == 'true'
+        run: |
+          python - <<'PYCODE'
+          import urllib.request, urllib.error
+          from pathlib import Path
+          for channel in ('stable','preview'):
+              folder=Path('public/updates')/channel;folder.mkdir(parents=True,exist_ok=True)
+              for platform in ('windows-x64','macos-arm64','macos-x64'):
+                  try:
+                      with urllib.request.urlopen(f'https://u1xovo.github.io/Haru/updates/{channel}/{platform}.xml',timeout=20) as response:
+                          (folder/(platform+'.xml')).write_bytes(response.read(1000000))
+                  except urllib.error.HTTPError as error:
+                      if error.code!=404: raise
+          PYCODE
+      - name: Validate complete signed update feeds
+        if: env.UPDATES == 'true'
+        run: uv run --no-sync python scripts/release_feed.py --artifacts artifacts --output public/updates --version "$VERSION" --notes-file notes.txt
+      - name: Create release draft and upload all installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNED: ${{ github.event_name == 'push' || inputs.signed }}
+        run: |
+          args=(--draft --title "Haru $VERSION" --notes-file notes.txt --target "$GITHUB_SHA")
+          if [ "$SIGNED" != true ]; then args+=(--prerelease); fi
+          gh release create "$TAG" artifacts/*.exe artifacts/*.dmg "${args[@]}"
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$TAG" --draft=false
+      - uses: actions/configure-pages@v5
+        if: env.UPDATES == 'true'
+      - uses: actions/upload-pages-artifact@v3
+        if: env.UPDATES == 'true'
+        with:
+          path: public
+      - uses: actions/deploy-pages@v4
+        if: env.UPDATES == 'true'

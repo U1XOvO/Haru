@@ -6,6 +6,7 @@ import os
 import re
 import random
 import sqlite3
+import portalocker
 import uuid
 import unicodedata
 from datetime import date, datetime, timedelta
@@ -76,10 +77,34 @@ class Service(Learning, Conversation, Study):
     def __init__(self, data_dir=None):
         self.dir=Path(data_dir or os.environ.get('HARU_DATA_DIR') or storage_root()/'runtime')
         self.dir.mkdir(parents=True,exist_ok=True)
+        from maintenance import lock, recover
+        self._storage_lock = lock(self.dir if data_dir else storage_root(), shared=True)
+        self._storage_lock.acquire()
+        lock_root = self.dir if data_dir else storage_root()
+        if (lock_root / '.migration.json').exists():
+            self._storage_lock.release()
+            with lock(lock_root): recover(lock_root)
+            self._storage_lock.acquire()
+        try:
+            with portalocker.Lock(self.dir / '.schema.lock', mode='a', timeout=15):
+                self._initialize_database()
+        except Exception:
+            if hasattr(self, 'db'): self.db.close()
+            self._storage_lock.release()
+            raise
+
+    def _initialize_database(self):
         self.db=sqlite3.connect(self.dir/'haru.sqlite3',timeout=15)
         self.db.row_factory=sqlite3.Row
         # Back up an existing learning database before additive schema migration.
         version=self.db.execute('PRAGMA user_version').fetchone()[0]
+        from maintenance import SCHEMA_VERSION
+        if version > SCHEMA_VERSION:
+            raise AppError('学习数据库来自更新版本，请升级 Haru；当前程序不会降级或修改它。')
+        if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='kv'").fetchone():
+            study_schema = self.get('study_schema')
+            if study_schema is not None and study_schema > 1:
+                raise AppError('JLPT 数据来自更新版本，请升级 Haru 后再打开。')
         if version<3 and self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='kv'").fetchone():
             backup_dir=self.dir/'backups';backup_dir.mkdir(exist_ok=True)
             backup=backup_dir/('before-progression-'+datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:6]+'.sqlite3')
@@ -102,11 +127,14 @@ class Service(Learning, Conversation, Study):
         self.init_learning()
         self.init_conversation()
         self.init_study(backup_needed=version>=3)
-        self.db.execute('PRAGMA user_version=3')
+        if version < 3:
+            self.db.execute('PRAGMA user_version=3')
         with self.db:
             if self.get('profile') is None: self.set('profile',{'name':'学习者','minutes':20,'time':'20:30','goal':'日常交流','start':date.today().isoformat(),'romaji':True})
 
-    def close(self): self.db.close()
+    def close(self):
+        try: self.db.close()
+        finally: self._storage_lock.release()
     def get(self,key,default=None):
         r=self.db.execute('SELECT value FROM kv WHERE key=?',(key,)).fetchone()
         return json.loads(r[0]) if r else default

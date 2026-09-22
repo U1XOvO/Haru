@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
 from app_paths import resource_root
 
 ROOT = resource_root()
-BACKEND_ACTIONS = frozenset('''config_get config_save grammar_catalog grammar_detail grammar_mark
+BACKEND_ACTIONS = frozenset('''import_legacy prepare_update recover_storage config_get config_save grammar_catalog grammar_detail grammar_mark
 grammar_practice study_catalog study_import study_generate study_generation_start study_generation_step
 study_generation_status study_generation_cancel study_delete study_start study_attempt study_save
 study_history study_mistakes study_retry study_summary study_image annotate dictionary dictionary_add

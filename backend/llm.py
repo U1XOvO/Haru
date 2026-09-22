@@ -17,7 +17,7 @@ class AppError(Exception): pass
 
 
 def config_root():
-    return storage_root() if getattr(sys, 'frozen', False) else ROOT
+    return storage_root()
 
 
 def configuration():

@@ -1,6 +1,6 @@
 [project]
 name = "haru-japanese"
-version = "1.0.0"
+version = "1.1.0"
 description = "A macOS and Windows Japanese learning app for Chinese speakers"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -16,6 +16,7 @@ package = false
 
 [dependency-groups]
 build = [
+    "cryptography>=46,<49",
     "pyinstaller>=6.16,<7",
     "pillow>=11,<13 ; sys_platform == 'win32'",
 ]

@@ -12,6 +12,9 @@ def smoke_test(report):
     import webview
     from windows_app import Host, API
     result = {'ok': False}
+    import clr
+    assembly = clr.AddReference('System.Speech, Version=4.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35')
+    result['speech_assembly_loaded'] = str(assembly.GetName().Name) == 'System.Speech'
     with tempfile.TemporaryDirectory(prefix='haru-app-smoke-') as directory:
         root = Path(directory)
         index = root / 'index.html'
@@ -64,6 +67,12 @@ def main():
         set_id('Haru.JapaneseLearner.Desktop')
         if smoke:
             return smoke_test(Path(sys.argv[2]))
+        # Matches the installer's AppMutex; keep the handle until process exit.
+        create_mutex = ctypes.windll.kernel32.CreateMutexW
+        create_mutex.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+        create_mutex.restype = ctypes.c_void_p
+        app_mutex = create_mutex(None, False, 'Haru.Desktop')
+        if not app_mutex: raise OSError('Could not create the application mutex')
         from windows_app import main as launch
         if launch() == 0:
             return 0

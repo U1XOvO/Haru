@@ -3,6 +3,9 @@ import WebKit
 import AVFoundation
 import UniformTypeIdentifiers
 import Darwin
+#if HARU_RELEASE
+import Sparkle
+#endif
 
 final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate {
     var window: NSWindow!
@@ -10,6 +13,21 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
     var root: URL!
     var python: String = ""
     var dataDir: URL!
+    var storageRoot: URL!
+    var bundledBackend = false
+    var distribution = "source"
+    var updatesEnabled = false
+    var instanceFD: Int32 = -1
+    var maintenanceMode = false
+    var smokeReport: URL? = {
+        let args=CommandLine.arguments
+        return args.count == 3 && args[1] == "--smoke-test" ? URL(fileURLWithPath:args[2]) : nil
+    }()
+    var maintenanceCompletions: [Int: ([String:Any])->Void] = [:]
+    #if HARU_RELEASE
+    var updaterController: SPUStandardUpdaterController?
+    var pendingInstall: (() -> Void)?
+    #endif
     let speech = AVSpeechSynthesizer()
     var recorder: AVAudioRecorder?
     var player: AVAudioPlayer?
@@ -26,28 +44,47 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
            let icon = NSImage(contentsOf: iconURL) {
             NSApp.applicationIconImage = icon
         }
-        guard let resource = Bundle.main.resourceURL,
-              let configData = try? Data(contentsOf: resource.appendingPathComponent("runtime.json")),
-              let config = try? JSONSerialization.jsonObject(with: configData) as? [String:String] else {
-            fatalAlert("应用文件不完整，请重新运行 start.command 构建 Haru。"); return
+        guard let resource = Bundle.main.resourceURL else { fatalAlert("应用资源不完整，请重新安装。"); return }
+        if let data = try? Data(contentsOf: resource.appendingPathComponent("app-release.json")),
+           let config = try? JSONSerialization.jsonObject(with: data) as? [String:Any] {
+            bundledBackend = true
+            root = resource
+            python = resource.appendingPathComponent("backend/HaruBackend").path
+            distribution = config["distribution"] as? String ?? "preview"
+            updatesEnabled = config["updates_enabled"] as? Bool ?? false
+            storageRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Haru", isDirectory:true)
+        } else {
+            guard let configData = try? Data(contentsOf: resource.appendingPathComponent("runtime.json")),
+                  let config = try? JSONSerialization.jsonObject(with: configData) as? [String:String],
+                  let rootPath = config["root"], let pythonPath = config["python"] else {
+                fatalAlert("应用运行配置无效，请重新运行 start.command 或重新安装 Haru。"); return
+            }
+            root = URL(fileURLWithPath:rootPath, isDirectory:true)
+            python = pythonPath
+            storageRoot = root
         }
-        guard let rootPath = config["root"], let pythonPath = config["python"] else {
-            fatalAlert("应用运行配置无效，请重新运行 start.command 构建 Haru。"); return
+        if let override = ProcessInfo.processInfo.environment["HARU_STORAGE_DIR"] {
+            storageRoot = URL(fileURLWithPath:override, isDirectory:true)
         }
-        root = URL(fileURLWithPath: rootPath, isDirectory: true)
-        python = pythonPath
-        let storage = root.appendingPathComponent("runtime", isDirectory: true)
-        dataDir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["HARU_DATA_DIR"] ?? storage.path, isDirectory: true)
-        guard FileManager.default.isExecutableFile(atPath: python) else {fatalAlert("找不到 Haru 运行组件，请重新运行 start.command 修复。"); return}
-        try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
+        dataDir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["HARU_DATA_DIR"] ?? storageRoot.appendingPathComponent("runtime").path, isDirectory:true)
+        guard FileManager.default.isExecutableFile(atPath:python) else {fatalAlert("找不到 Haru 运行组件，请重新构建或重新安装。");return}
+        do { try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories:true) }
+        catch { fatalAlert("无法打开学习数据目录，请检查权限。"); return }
+        instanceFD = open(storageRoot.appendingPathComponent(".app.lock").path, O_CREAT | O_RDWR, 0o600)
+        guard instanceFD >= 0, flock(instanceFD, LOCK_EX | LOCK_NB) == 0 else {fatalAlert("Haru 已在运行，请使用已打开的窗口。");return}
         let menu = NSMenu(); let appMenu = NSMenu(); let appItem = NSMenuItem()
         appItem.submenu = appMenu; menu.addItem(appItem)
         appMenu.addItem(withTitle: "关于 Haru", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle:"检查更新…", action:#selector(checkUpdates), keyEquivalent:"")
         appMenu.addItem(.separator()); appMenu.addItem(withTitle: "退出 Haru", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let edit = NSMenu(title: "编辑"); let editItem = NSMenuItem(title: "编辑", action: nil, keyEquivalent: ""); editItem.submenu = edit; menu.addItem(editItem)
         for (name, action, key) in [("撤销", "undo:", "z"), ("重做", "redo:", "Z"), ("剪切", "cut:", "x"), ("复制", "copy:", "c"), ("粘贴", "paste:", "v"), ("全选", "selectAll:", "a")] { edit.addItem(withTitle:name, action:Selector(action), keyEquivalent:key) }
         NSApp.mainMenu = menu
         let configView = WKWebViewConfiguration()
+        if smokeReport != nil {
+            configView.userContentController.addUserScript(WKUserScript(source:"window.haruSmokeMode=true;",injectionTime:.atDocumentStart,forMainFrameOnly:true))
+            DispatchQueue.main.asyncAfter(deadline:.now()+45){if self.smokeReport != nil {self.finishSmoke(false)}}
+        }
         configView.userContentController.add(self, name: "haru")
         configView.preferences.javaScriptCanOpenWindowsAutomatically = false
         web = WKWebView(frame:.zero,configuration:configView)
@@ -62,6 +99,11 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
         let index = root.appendingPathComponent("ui/index.html")
         web.loadFileURL(index,allowingReadAccessTo:root.appendingPathComponent("ui",isDirectory:true))
         NSApp.activate(ignoringOtherApps:true)
+        #if HARU_RELEASE
+        if updatesEnabled {
+            updaterController = SPUStandardUpdaterController(startingUpdater:true, updaterDelegate:self, userDriverDelegate:nil)
+        }
+        #endif
     }
     func fatalAlert(_ message:String) {let a=NSAlert(); a.messageText="Haru 暂时无法启动"; a.informativeText=message; a.runModal(); NSApp.terminate(nil)}
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool {true}
@@ -83,6 +125,7 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
         }
     }
     func reply(_ id:Int,_ result:[String:Any]) {
+        if let completion = maintenanceCompletions.removeValue(forKey:id) {completion(result);return}
         guard let data=try? JSONSerialization.data(withJSONObject:result,options:[.fragmentsAllowed]),let json=String(data:data,encoding:.utf8) else{return}
         web.evaluateJavaScript("window.haruResolve(\(id),\(json))",completionHandler:nil)
     }
@@ -108,8 +151,44 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
         guard message.frameInfo.isMainFrame, message.frameInfo.request.url?.isFileURL == true,
               message.frameInfo.request.url?.standardizedFileURL.path == root.appendingPathComponent("ui/index.html").standardizedFileURL.path,
               let m=message.body as? [String:Any],let id=m["id"] as? Int,let action=m["action"] as? String else{return}
+        if maintenanceMode {fail(id,"正在准备更新或迁移，请重新打开 Haru。");return}
         let p=m["params"] as? [String:Any] ?? [:]
         switch action {
+        case "smoke_result":
+            guard smokeReport != nil else {fail(id,"操作无效。");return}
+            finishSmoke(p["ok"] as? Bool == true)
+        case "app_info":
+            var automatic = false
+            #if HARU_RELEASE
+            automatic = updaterController?.updater.automaticallyChecksForUpdates ?? false
+            #endif
+            ok(id,["version":Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "unknown", "distribution":distribution, "updates_enabled":updatesEnabled, "automatic_updates":automatic])
+        case "check_updates":
+            checkUpdates();ok(id)
+        case "update_preferences":
+            guard let enabled=p["enabled"] as? Bool else {fail(id,"更新设置无效。");return}
+            #if HARU_RELEASE
+            updaterController?.updater.automaticallyChecksForUpdates = enabled
+            #endif
+            ok(id,["automatic_updates":updatesEnabled && enabled])
+        case "open_downloads":
+            NSWorkspace.shared.open(URL(string:"https://github.com/U1XOvO/Haru/releases")!);ok(id)
+        case "import_legacy":
+            let panel=NSOpenPanel();panel.canChooseDirectories=true;panel.canChooseFiles=false;panel.allowsMultipleSelection=false
+            panel.message="请选择已退出运行的旧版 Haru 仓库。只向空白安装导入，原目录保持不变。"
+            panel.beginSheetModal(for:window){response in
+                guard response == .OK,let source=panel.url else {self.ok(id,["cancelled":true]);return}
+                self.processLock.lock();let busy = !self.backendProcesses.isEmpty;self.processLock.unlock()
+                guard !busy,self.recorder?.isRecording != true else {self.fail(id,"请等待任务完成并停止录音后导入。");return}
+                self.maintenanceMode=true
+                self.maintenanceCompletions[id] = {result in
+                    self.maintenanceMode = result["ok"] as? Bool == true
+                    self.reply(id,result)
+                }
+                self.runBackend(id,"import_legacy",["source":source.path])
+            }
+        case "prepare_update", "recover_storage":
+            fail(id,"此操作只能由应用内部发起。")
         case "study_pick":
             let panel=NSOpenPanel(); panel.allowsMultipleSelection=false; panel.canChooseDirectories=false
             panel.allowedContentTypes=[.json,.pdf,.mp3,.mpeg4Audio,.wav,.png,.jpeg]
@@ -186,12 +265,12 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
         } catch {fail(id,"录音启动失败，请检查麦克风与本地文件权限。")}
     }
     func runBackend(_ id:Int,_ action:String,_ params:[String:Any]) {
-        let actions:Set<String>=["config_get","config_save","grammar_catalog","grammar_detail","grammar_mark","grammar_practice","study_catalog","study_import","study_generate","study_generation_start","study_generation_step","study_generation_status","study_generation_cancel","study_delete","study_start","study_attempt","study_save","study_history","study_mistakes","study_retry","study_summary","study_image","annotate","dictionary","dictionary_add","encounter","knowledge","chat_state","chat_start","chat_finish","chat_memory","chat_stream","chat_cancel","daily_word","daily_word_add","bootstrap","profile","lesson","grade","cards","card_create","card_random","card_seed","review","chat","chat_history","decode","quiz","immersion","export","ping","history","curriculum","stage_assessment","remedial"]
+        let actions:Set<String>=["import_legacy","prepare_update","recover_storage","config_get","config_save","grammar_catalog","grammar_detail","grammar_mark","grammar_practice","study_catalog","study_import","study_generate","study_generation_start","study_generation_step","study_generation_status","study_generation_cancel","study_delete","study_start","study_attempt","study_save","study_history","study_mistakes","study_retry","study_summary","study_image","annotate","dictionary","dictionary_add","encounter","knowledge","chat_state","chat_start","chat_finish","chat_memory","chat_stream","chat_cancel","daily_word","daily_word_add","bootstrap","profile","lesson","grade","cards","card_create","card_random","card_seed","review","chat","chat_history","decode","quiz","immersion","export","ping","history","curriculum","stage_assessment","remedial"]
         guard actions.contains(action),let input=try? JSONSerialization.data(withJSONObject:["action":action,"params":params]),input.count<=100000 else{fail(id,"操作无效或输入过长。");return}
         let interpreter=python;let project=root!;let storage=dataDir!
         queue.async {
-            let process=Process(); process.executableURL=URL(fileURLWithPath:interpreter); process.arguments=[project.appendingPathComponent("backend/bridge.py").path]; process.currentDirectoryURL=project
-            var env=ProcessInfo.processInfo.environment;env["HARU_DATA_DIR"]=storage.path; env["PYTHONDONTWRITEBYTECODE"]="1";process.environment=env
+            let process=Process(); process.executableURL=URL(fileURLWithPath:interpreter); process.arguments=self.bundledBackend ? [] : [project.appendingPathComponent("backend/bridge.py").path]; process.currentDirectoryURL=project
+            var env=ProcessInfo.processInfo.environment;env["HARU_DATA_DIR"]=storage.path;env["HARU_STORAGE_DIR"]=self.storageRoot.path; env["PYTHONDONTWRITEBYTECODE"]="1";process.environment=env
             let stdin=Pipe();let stdout=Pipe();process.standardInput=stdin;process.standardOutput=stdout;process.standardError=FileHandle.nullDevice
             do {
                 try process.run()
@@ -245,15 +324,71 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
                 if didTimeOut {
                     result=["ok":false,"error":"操作超过10分钟上限，后台任务已停止。请确认任务状态后重试。"]
                 } else if action == "chat_stream",result == nil {result=["ok":false,"error":"生成已停止或连接中断，本轮未保存。"]}
-                DispatchQueue.main.async {if let r=result{self.reply(id,r)}else{self.fail(id,"本地服务未返回结果。请重新运行 start.command 检查项目环境。")}}
-            } catch {DispatchQueue.main.async{self.fail(id,"无法启动项目 Python，请关闭应用并重新运行 start.command。")}}
+                DispatchQueue.main.async {if let r=result{self.reply(id,r)}else{self.fail(id,"本地服务未返回结果，请重新打开或重新安装 Haru。")}}
+            } catch {DispatchQueue.main.async{self.fail(id,"无法启动 Haru 运行组件，请重新构建或重新安装。")}}
         }
     }
+    func finishSmoke(_ success:Bool) {
+        guard let report=smokeReport else {return}
+        let result:[String:Any] = ["ok":success,"bundled_backend":bundledBackend]
+        if let data=try? JSONSerialization.data(withJSONObject:result) {try? data.write(to:report,options:.atomic)}
+        smokeReport=nil
+        NSApp.terminate(nil)
+    }
+    func webView(_ webView:WKWebView,didFinish navigation:WKNavigation!) {
+        guard smokeReport != nil else {return}
+        web.evaluateJavaScript("rpc('card_seed').then(r=>window.webkit.messageHandlers.haru.postMessage({id:-99,action:'smoke_result',params:{ok:r.length===5}})).catch(()=>window.webkit.messageHandlers.haru.postMessage({id:-99,action:'smoke_result',params:{ok:false}}));void 0",completionHandler:nil)
+    }
+    @objc func checkUpdates() {
+        #if HARU_RELEASE
+        if pendingInstall != nil {prepareInstallation();return}
+        if let updaterController {updaterController.checkForUpdates(nil);return}
+        #endif
+        let alert=NSAlert();alert.messageText="此构建未启用自动更新";alert.informativeText="请从 Haru 发布页面下载新版安装包。源码版可 git pull 后重新运行启动脚本。";alert.runModal()
+    }
+    #if HARU_RELEASE
+    func prepareInstallation() {
+        web.evaluateJavaScript("window.haruPrepareUpdate && window.haruPrepareUpdate()") {ready,error in
+            self.processLock.lock();let busy = !self.backendProcesses.isEmpty;self.processLock.unlock()
+            guard ready as? Bool == true,!busy,self.recorder?.isRecording != true else {
+                self.web.evaluateJavaScript("window.haruCancelUpdate && window.haruCancelUpdate()",completionHandler:nil)
+                let alert=NSAlert();alert.messageText="更新已准备好";alert.informativeText="请完成录音、生成或考试后，再点击检查更新继续安装。";alert.runModal();return
+            }
+            self.maintenanceMode=true
+            self.maintenanceCompletions[-1] = {result in
+                if result["ok"] as? Bool == true {
+                    let install=self.pendingInstall;self.pendingInstall=nil;install?()
+                } else {
+                    self.maintenanceMode=false
+                    self.web.evaluateJavaScript("window.haruCancelUpdate && window.haruCancelUpdate()",completionHandler:nil)
+                    let alert=NSAlert();alert.messageText="更新前备份未完成";alert.informativeText="请检查数据目录空间和权限，然后再次点击检查更新。";alert.runModal()
+                }
+            }
+            self.runBackend(-1,"prepare_update",[:])
+        }
+    }
+    #endif
     func webView(_ webView:WKWebView,decidePolicyFor navigationAction:WKNavigationAction,decisionHandler:@escaping(WKNavigationActionPolicy)->Void) {
         guard let url=navigationAction.request.url else{decisionHandler(.cancel);return}
         if url.isFileURL && url.standardizedFileURL.path == root.appendingPathComponent("ui/index.html").standardizedFileURL.path {decisionHandler(.allow)} else {decisionHandler(.cancel)}
     }
 }
+#if HARU_RELEASE
+extension HaruApp: SPUUpdaterDelegate {
+    func updater(_ updater:SPUUpdater, didAbortWithError error:Error) {
+        guard pendingInstall != nil || maintenanceCompletions[-1] != nil else {return}
+        pendingInstall=nil
+        maintenanceCompletions.removeValue(forKey:-1)
+        maintenanceMode=false
+        web.evaluateJavaScript("window.haruCancelUpdate && window.haruCancelUpdate()",completionHandler:nil)
+    }
+    func updater(_ updater:SPUUpdater, shouldPostponeRelaunchForUpdate item:SUAppcastItem, untilInvokingBlock installHandler:@escaping () -> Void) -> Bool {
+        pendingInstall=installHandler
+        prepareInstallation()
+        return true
+    }
+}
+#endif
 let app=NSApplication.shared
 let delegate=HaruApp()
 app.delegate=delegate

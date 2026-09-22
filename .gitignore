@@ -61,3 +61,24 @@
 !/ui/study.js
 !/ui/style.css
 !/uv.lock
+
+# Installer, updater and release acceptance sources (artifacts and keys stay ignored).
+!/.github/
+!/.github/workflows/
+!/tests/
+!/.github/workflows/release.yml
+!/RELEASING.md
+!/backend/maintenance.py
+!/native/windows_updater.py
+!/scripts/fetch_release_tools.py
+!/scripts/build_release.py
+!/scripts/haru_macos_backend.spec
+!/scripts/windows_installer.iss
+!/scripts/sign_release.py
+!/scripts/release_feed.py
+!/scripts/test_bundle.py
+!/scripts/test_windows_install.py
+!/scripts/signing_setup.py
+!/tests/test_distribution.py
+!/tests/test_release_ui.js
+!/ui/release.js

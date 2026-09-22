@@ -21,6 +21,8 @@ def is_current(root=ROOT):
     try:
         manifest = json.loads((root / 'build/windows/build.json').read_text(encoding='utf-8'))
         app = root / 'dist/Haru'
+        if (app / '_internal/app-release.json').exists():
+            return False  # Source launch must not reuse a distribution build with another data root.
         return (manifest == {'root': str(root.resolve()), 'inputs': inputs(root)}
                 and all((app / name).is_file() for name in
                         ('Haru.exe', 'HaruBackend.exe', '_internal/python312.dll',
