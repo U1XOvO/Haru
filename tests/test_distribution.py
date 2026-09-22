@@ -109,8 +109,8 @@ class DistributionTests(unittest.TestCase):
         self.assertTrue((folder / '.env').is_file())
 
     def test_frozen_macos_uses_application_support(self):
-        with patch.object(sys, 'frozen', True, create=True), patch.object(sys, '_MEIPASS', str(self.root), create=True), patch.object(sys, 'platform', 'darwin'), patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(app_paths.storage_root(), Path.home() / 'Library/Application Support/Haru')
+        with patch.object(sys, 'frozen', True, create=True), patch.object(sys, '_MEIPASS', str(self.root), create=True), patch.object(sys, 'platform', 'darwin'), patch.dict(os.environ, {}, clear=True), patch.object(Path, 'home', return_value=self.root):
+            self.assertEqual(app_paths.storage_root(), self.root / 'Library/Application Support/Haru')
 
     def test_preview_does_not_initialize_updater(self):
         from windows_updater import WindowsUpdater
