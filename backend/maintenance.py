@@ -1,5 +1,6 @@
 """Local backups and recoverable migration. Never uploads or logs learner data."""
 import json
+from contextlib import closing
 import os
 from pathlib import Path
 import shutil
@@ -40,11 +41,11 @@ def snapshot(source, destination):
     def progress(status, remaining, total):
         if time.monotonic() - started > 30:
             raise AppError('数据库仍被占用，请退出旧版 Haru 后重试。')
-    with sqlite3.connect(source.resolve().as_uri() + '?mode=ro', uri=True, timeout=5) as src:
+    with closing(sqlite3.connect(source.resolve().as_uri() + '?mode=ro', uri=True, timeout=5)) as src:
         version = src.execute('PRAGMA user_version').fetchone()[0]
         if version > SCHEMA_VERSION:
             raise AppError('学习数据来自更新版本，请升级 Haru 后再打开，不能降级覆盖。')
-        with sqlite3.connect(destination) as dst:
+        with closing(sqlite3.connect(destination)) as dst:
             src.backup(dst, pages=256, progress=progress, sleep=0.05)
             if dst.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
                 raise AppError('数据库完整性检查失败，原数据未修改。')
@@ -101,7 +102,7 @@ def _empty_target(root):
             raise AppError('当前安装已有学习文件，导入不会覆盖它们。')
     db = root / 'runtime/haru.sqlite3'
     if db.is_file():
-        with sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True) as connection:
+        with closing(sqlite3.connect(db.resolve().as_uri() + '?mode=ro', uri=True)) as connection:
             tables = [r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")]
             for table in tables:
                 if table == 'kv':
@@ -150,7 +151,7 @@ def import_legacy(source, root):
     # Do not let stale WAL files from the empty target modify the imported snapshot.
     db = root / 'runtime/haru.sqlite3'
     if db.exists():
-        with sqlite3.connect(db) as connection:
+        with closing(sqlite3.connect(db)) as connection:
             if connection.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0] != 0:
                 raise AppError('请关闭其他 Haru 窗口后重试导入。')
         for suffix in ('-wal', '-shm'):

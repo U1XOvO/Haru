@@ -1,4 +1,5 @@
 import json
+from contextlib import closing
 import os
 from pathlib import Path
 import sqlite3
@@ -60,10 +61,10 @@ class DistributionTests(unittest.TestCase):
         except OSError: self.skipTest('Symlinks unavailable on this runner')
         with self.assertRaises(AppError): maintenance.import_legacy(source, target)
         link.unlink()
-        with sqlite3.connect(source / 'runtime/haru.sqlite3') as db: db.execute('PRAGMA user_version=99')
+        with closing(sqlite3.connect(source / 'runtime/haru.sqlite3')) as db: db.execute('PRAGMA user_version=99')
         with self.assertRaises(AppError): maintenance.import_legacy(source, target)
         with self.assertRaises(AppError): Service(source / 'runtime')
-        with sqlite3.connect(source / 'runtime/haru.sqlite3') as db:
+        with closing(sqlite3.connect(source / 'runtime/haru.sqlite3')) as db:
             self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 99)
 
     def test_failure_rolls_back_and_retry_succeeds(self):
@@ -103,7 +104,7 @@ class DistributionTests(unittest.TestCase):
         db.execute('PRAGMA journal_mode=WAL')
         db.execute("INSERT INTO kv VALUES ('backup-test','true')"); db.commit()
         folder = maintenance.backup(root)
-        with sqlite3.connect(folder / 'haru.sqlite3') as copy:
+        with closing(sqlite3.connect(folder / 'haru.sqlite3')) as copy:
             self.assertEqual(copy.execute("SELECT value FROM kv WHERE key='backup-test'").fetchone()[0], 'true')
         self.assertTrue((folder / '.env').is_file())
 
