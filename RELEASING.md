@@ -14,9 +14,9 @@ node tests/test_release_ui.js
 
 Windows 构建机需要 Inno Setup 6（`ISCC` 可以指定编译器路径）；macOS 构建机需要 Apple 命令行工具。Sparkle 2.10.0、WinSparkle 0.9.4 下载到项目的 `build/release-tools`，不全局安装。安装包位于 `dist/installers`。
 
-默认构建是未配置在线更新的测试包。`--updates` 接入独立的 preview 更新通道，只需要 `HARU_UPDATE_PUBLIC_KEY`；`--signed` 额外要求操作系统发布者签名与 macOS 公证，并接入 stable 通道。两种通道的更新包都必须通过 Ed25519 验证。测试版安装可能出现未知发布者或未公证提示，不能将它当作已签名正式版。
+默认构建是未配置在线更新的 preview 包。`--channel stable --updates` 构建正式版并接入 stable 更新通道，只需要 `HARU_UPDATE_PUBLIC_KEY`；`--signed` 额外要求操作系统发布者证书与 macOS 公证，省略 `--channel` 时默认 stable。发布通道和发布者签名分别配置，两种通道的更新包都必须通过 Ed25519 验证。未配置发布者证书的安装包可能出现未知发布者或未公证提示，Release 说明必须如实注明。
 
-Windows 支持 Windows 10/11 x64，安装前检测 WebView2，缺失时引导安装微软官方 Runtime。日语系统音色仍由用户安装。macOS 支持 14+，分别构建 arm64 和 x64，DMG 中的 App 应复制到 Applications 后运行。
+Windows 支持 Windows 10/11 x64，安装前检测 WebView2，缺失时引导安装微软官方 Runtime。Windows 与 macOS 统一使用 Edge TTS 日语朗读，未缓存内容需要联网。macOS 支持 14+，分别构建 arm64 和 x64，DMG 中的 App 应复制到 Applications 后运行。
 
 ```sh
 # macOS：隔离数据、移动 App 后，验证真实界面和内置后端
@@ -26,19 +26,20 @@ uv run --no-sync python scripts/test_bundle.py dist/Haru --gui
 uv run --no-sync python scripts/test_windows_install.py
 ```
 
-这些测试不会调用 AI。Windows GUI 自检额外验证打包后的 System.Speech 完整程序集名称能加载；不等同于真实扬声器、日语音色和麦克风验收。
+这些测试不会调用 AI 或在线语音服务。Windows GUI 自检额外验证共享 Edge TTS 模块与音频设备接口能加载；不等同于在线日语合成、真实扬声器和麦克风验收。
 
 ## GitHub Actions
 
 工作流 `Desktop installers` 在 `windows-2025`、`macos-15`、`macos-15-intel` 上构建和验证。
 
-- `signed=false, updates=false, publish=false`：无需证书或密钥，产出三个可下载的 Actions 构建附件。
-- `signed=false, updates=true, publish=true`：发布未做操作系统签名的预发布安装包，更新包由 Ed25519 签名，更新清单进入 preview 通道。
-- `signed=true, publish=true` 或推送 `vMAJOR.MINOR.PATCH` 标签：生成正式签名安装包，发布 stable 通道。标签必须与 `pyproject.toml` 的版本一致。
+- `channel=preview, signed=false, updates=false, publish=false`：无需证书或密钥，产出三个可下载的 Actions 构建附件。
+- `channel=preview, signed=false, updates=true, publish=true`：发布预发布安装包，更新包由 Ed25519 签名，更新清单进入 preview 通道。
+- `channel=stable, signed=false, updates=true, publish=true`：发布无 preview 后缀的正式版，更新清单进入 stable 通道，仍需说明未使用系统发布者证书。
+- 推送 `vMAJOR.MINOR.PATCH` 标签：发布 stable 正式版并启用 Ed25519 更新验签。标签必须与 `pyproject.toml` 的版本一致。默认不使用系统发布者证书；配置相应证书 Secrets 和仓库变量 `HARU_PUBLISHER_SIGNED=true` 后，标签发布会额外启用发布者签名与公证。手动触发通过 `signed=true` 启用。
 
 `pyproject.toml` 是版本的唯一来源，版本变化后更新 `uv.lock`。每次向用户发布可更新的新版本都必须递增版本，不能靠重复发布同一版本强制更新。
 
-只有三个平台全部通过检查，才创建 Release 草稿、上传全部安装包、公开 Release，最后部署更新清单。构建附件和 Release 只上传指定安装包及非敏感构建报告。默认依赖锁文件，正式签名要求干净检出。
+只有三个平台全部通过检查，才创建 Release 草稿、上传全部安装包、公开 Release，最后部署更新清单。构建附件和 Release 只上传指定安装包及非敏感构建报告。默认依赖锁文件，stable 或发布者签名构建要求干净检出。
 
 在仓库 Pages 设置中选择 **GitHub Actions**。更新清单固定为：
 

@@ -111,7 +111,7 @@ def _empty_target(root):
                             profile = json.loads(value)
                             if any(profile.get(k) != v for k, v in {'name':'学习者', 'minutes':20, 'time':'20:30', 'goal':'日常交流', 'romaji':True}.items()):
                                 raise AppError('当前安装已有个人偏好，导入不会覆盖它们。')
-                        elif key != 'study_schema':
+                        elif key not in {'study_schema','study_attempt_layout','performance_schema'}:
                             raise AppError('当前安装已有学习记录，导入不会覆盖它们。')
                 elif not table.startswith('sqlite_'):
                     quoted = table.replace('"', '""')

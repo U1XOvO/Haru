@@ -48,8 +48,26 @@ class Learning:
         CREATE TABLE IF NOT EXISTS lexical_entries(word TEXT PRIMARY KEY,data TEXT NOT NULL);
         ''')
 
-    def reading_cache(self):
-        return [json.loads(r[0]) for r in self.db.execute('SELECT data FROM annotations ORDER BY rowid DESC LIMIT 200')]
+    def reading_lookup(self, p):
+        sentences = p.get('sentences')
+        if not isinstance(sentences, list) or not 1 <= len(sentences) <= 16 or any(
+                not isinstance(s, str) or not 0 < len(s) <= 1200 for s in sentences):
+            raise AppError('每次可读取1–16句已保存注音。')
+        marks = ','.join('?' for _ in sentences)
+        items = []; checked = []
+        size = 0
+        rows = {r['sentence']:r['data'] for r in self.db.execute(f'SELECT sentence,data FROM annotations WHERE sentence IN ({marks})', sentences)}
+        for sentence in dict.fromkeys(sentences):
+            raw = rows.get(sentence)
+            length = len(raw.encode('utf-8')) if raw else 0
+            if length <= 1_500_000 and size + length > 1_500_000:
+                break
+            # Oversized legacy annotations cannot be sent through bounded IPC.
+            checked.append(sentence)
+            if raw and length <= 1_500_000:
+                size += length
+                items.append(json.loads(raw))
+        return dict(items=items,checked=checked)
 
     def annotate(self, p):
         sentence = p.get('text')
@@ -118,11 +136,24 @@ class Learning:
     def dictionary_add(self, p):
         row = self.db.execute('SELECT data FROM lexical_entries WHERE word=?', (p.get('word'),)).fetchone()
         if not row: raise AppError('请先打开词典查询此词。')
-        return self.add_card(json.loads(row[0]))
+        return self.add_card(json.loads(row[0]), compact=p.get('compact') is True)
 
     def encounter(self, p):
         """Only persisted teaching text is eligible; repeat renders are idempotent."""
-        ref = p.get('ref')
+        return self.encounters({'refs': [p.get('ref')]})
+
+    def encounters(self, p):
+        refs = p.get('refs')
+        if not isinstance(refs, list) or not 1 <= len(refs) <= 40 or any(
+                not isinstance(ref, str) or len(ref) > 100 for ref in refs):
+            raise AppError('每次可记录1–40个学习来源。')
+        records = [(word, ref, 'exposure', datetime.now().isoformat(timespec='seconds'))
+                   for ref in dict.fromkeys(refs) for word in self._encounter_words(ref)]
+        with self.db:
+            self.db.executemany('INSERT OR IGNORE INTO encounters VALUES (?,?,?,?)', records)
+        return {'recorded': len(records)}
+
+    def _encounter_words(self, ref):
         if not isinstance(ref, str): raise AppError('学习来源无效。')
         if ref.startswith('message:'):
             row = self.db.execute("SELECT data FROM messages WHERE id=? AND role='assistant'", (ref[8:],)).fetchone()
@@ -147,25 +178,25 @@ class Learning:
             entries += [json.loads(r[0]) for r in self.db.execute(
                 f"SELECT data FROM cards WHERE json_extract(data,'$.example') IN ({placeholders})", passages)]
         seen.update(c['word'] for c in entries if c['example'] in passages and c['word'] in c['example'])
-        with self.db:
-            for w in seen:
-                self.db.execute('INSERT OR IGNORE INTO encounters VALUES (?,?,?,?)',
-                                (w, ref, 'exposure', datetime.now().isoformat(timespec='seconds')))
-        return {'recorded': len(seen)}
+        return seen
 
     def knowledge(self, p):
         items = {}
-        for r in self.db.execute('SELECT word,kind,COUNT(*) AS n,MAX(created) AS last FROM encounters GROUP BY word,kind'):
+        for r in self.db.execute('SELECT word,kind,COUNT(*) AS n FROM encounters GROUP BY word,kind'):
             d = items.setdefault(r['word'], dict(word=r['word'], exposure=0, lookup=0, reviews=0, recalled=0, last_review=None))
             d[r['kind']] = r['n']
-        for r in self.db.execute("SELECT data,created FROM events WHERE kind='review' ORDER BY created"):
-            e = json.loads(r['data']); w = e.get('word')
+        for r in self.db.execute("SELECT json_extract(data,'$.word') AS word,COUNT(*) AS reviews,SUM(json_extract(data,'$.quality')>=3) AS recalled,MAX(created) AS last_review FROM events WHERE kind='review' GROUP BY json_extract(data,'$.word')"):
+            w = r['word']
             if not w: continue
             d = items.setdefault(w, dict(word=w, exposure=0, lookup=0, reviews=0, recalled=0, last_review=None))
-            d['reviews'] += 1; d['recalled'] += int(e['quality'] >= 3); d['last_review'] = r['created']
+            d.update(reviews=r['reviews'], recalled=r['recalled'], last_review=r['last_review'])
         for r in self.db.execute('SELECT word FROM cards'):
             items.setdefault(r[0], dict(word=r[0], exposure=0, lookup=0, reviews=0, recalled=0, last_review=None))
-        return sorted(items.values(), key=lambda d: (-d['reviews'], -d['exposure'], d['word']))
+        result = sorted(items.values(), key=lambda d: (-d['reviews'], -d['exposure'], d['word']))
+        if 'limit' in p:
+            from service import integer
+            return result[:integer(p['limit'],1,100,'词汇统计数量')]
+        return result
 
     def review_targets(self):
         rows = self.db.execute('SELECT word,data,id FROM cards WHERE due<=? ORDER BY ease,due,word LIMIT 3',

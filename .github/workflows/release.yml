@@ -3,12 +3,17 @@ name: Desktop installers
 on:
   workflow_dispatch:
     inputs:
+      channel:
+        description: Release and update channel
+        type: choice
+        options: [preview, stable]
+        default: preview
       signed:
-        description: Build signed release installers (requires signing secrets)
+        description: Sign installers with OS publisher certificates (requires signing secrets)
         type: boolean
         default: false
       updates:
-        description: Enable signed preview updates (Ed25519 secrets required, no publisher certificate required)
+        description: Enable verified updates (Ed25519 secrets required, no publisher certificate required)
         type: boolean
         default: true
       publish:
@@ -25,6 +30,11 @@ concurrency:
   group: desktop-release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  CHANNEL: ${{ github.event_name == 'push' && 'stable' || inputs.channel }}
+  SIGNED: ${{ inputs.signed || (github.event_name == 'push' && vars.HARU_PUBLISHER_SIGNED == 'true') }}
+  UPDATES: ${{ github.event_name == 'push' || inputs.signed || inputs.updates }}
+
 jobs:
   build:
     strategy:
@@ -40,8 +50,6 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
-      SIGNED: ${{ github.event_name == 'push' || inputs.signed }}
-      UPDATES: ${{ github.event_name == 'push' || inputs.signed || inputs.updates }}
       PYTHONUTF8: '1'
       PYINSTALLER_CONFIG_DIR: ${{ github.workspace }}/.cache/pyinstaller
       MACOSX_DEPLOYMENT_TARGET: '14.0'
@@ -70,12 +78,12 @@ jobs:
           from pathlib import Path
           version=tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
           with Path(os.environ['GITHUB_ENV']).open('a') as output:
-              output.write('HARU_RELEASE_TAG=v'+version+('' if os.environ['SIGNED']=='true' else '-preview.'+os.environ['GITHUB_RUN_NUMBER'])+'\n')
+              output.write('HARU_RELEASE_TAG=v'+version+('' if os.environ['CHANNEL']=='stable' else '-preview.'+os.environ['GITHUB_RUN_NUMBER'])+'\n')
           PYCODE
       - name: Test storage, recovery and update guards
         run: |
           uv run --no-sync python -m unittest discover -s tests -v
-          node tests/test_release_ui.js
+          for test in tests/test_*.js; do node "$test"; done
       - name: Configure signing credentials
         if: env.SIGNED == 'true'
         env:
@@ -93,11 +101,11 @@ jobs:
           HARU_UPDATE_PUBLIC_KEY: ${{ secrets.HARU_UPDATE_PUBLIC_KEY }}
         run: |
           if [ "$SIGNED" = true ]; then
-            uv run --no-sync python scripts/build_release.py --signed
+            uv run --no-sync python scripts/build_release.py --channel "$CHANNEL" --signed
           elif [ "$UPDATES" = true ]; then
-            uv run --no-sync python scripts/build_release.py --updates
+            uv run --no-sync python scripts/build_release.py --channel "$CHANNEL" --updates
           else
-            uv run --no-sync python scripts/build_release.py
+            uv run --no-sync python scripts/build_release.py --channel "$CHANNEL"
           fi
       - name: Validate upstream update signatures with disposable keys
         run: uv run --no-sync python scripts/test_update_tools.py
@@ -138,8 +146,6 @@ jobs:
       id-token: write
     environment:
       name: github-pages
-    env:
-      UPDATES: ${{ github.event_name == 'push' || inputs.signed || inputs.updates }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -155,8 +161,6 @@ jobs:
           path: artifacts
           merge-multiple: true
       - name: Prepare release metadata
-        env:
-          SIGNED: ${{ github.event_name == 'push' || inputs.signed }}
         run: |
           python - <<'PY'
           import os,tomllib
@@ -164,8 +168,13 @@ jobs:
           version=tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
           with Path(os.environ['GITHUB_ENV']).open('a') as output:
               output.write('VERSION='+version+'\n')
-              output.write('TAG=v'+version+('' if os.environ['SIGNED']=='true' else '-preview.'+os.environ['GITHUB_RUN_NUMBER'])+'\n')
-          Path('notes.txt').write_text('Haru '+version+'\n\n'+('Standalone installers with verified in-app updates.' if os.environ['SIGNED']=='true' else 'Preview for testing. macOS Developer ID notarization and Windows publisher signing are not included. When enabled, update payloads are independently verified with Ed25519 signatures.'))
+              output.write('TAG=v'+version+('' if os.environ['CHANNEL']=='stable' else '-preview.'+os.environ['GITHUB_RUN_NUMBER'])+'\n')
+          notes = 'Haru '+version+(' 正式版' if os.environ['CHANNEL']=='stable' else ' 预发布版')+'\n\nWindows 与 macOS 独立安装包。'
+          if os.environ['UPDATES']=='true':
+              notes += '\n更新包通过 Ed25519 签名验证。'
+          if os.environ['SIGNED']!='true':
+              notes += '\n尚未使用 Windows 发布者证书或 macOS Developer ID 签名与 Apple 公证，首次安装可能出现系统安全提示。'
+          Path('notes.txt').write_text(notes,encoding='utf-8')
           PY
       - name: Preserve the other update channel
         if: env.UPDATES == 'true'
@@ -188,10 +197,9 @@ jobs:
       - name: Create release draft and upload all installers
         env:
           GH_TOKEN: ${{ github.token }}
-          SIGNED: ${{ github.event_name == 'push' || inputs.signed }}
         run: |
           args=(--draft --title "Haru $VERSION" --notes-file notes.txt --target "$GITHUB_SHA")
-          if [ "$SIGNED" != true ]; then args+=(--prerelease); fi
+          if [ "$CHANNEL" = preview ]; then args+=(--prerelease); fi
           gh release create "$TAG" artifacts/*.exe artifacts/*.dmg "${args[@]}"
       - name: Publish complete release
         env:

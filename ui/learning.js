@@ -1,7 +1,9 @@
 'use strict';
 // Additive learning tools. Existing whole-sentence reading/translation stays visible.
 const annotationCache=new Map();
-let dictionaryItem=null,chatState=null,chatMessages=[],chatFlight=null,chatBusy=false,chatLoadRun=0,dictionaryRun=0;
+const annotationChecked=new Set();
+let readingFlight=false;
+let chatState=null,chatMessages=[],chatFlight=null,chatBusy=false,chatLoadRun=0,dictionaryRun=0;
 const viewedSources=new Set();
 function learningReadContext(){return {page,nav:navigationRun,ref:page==='lessons'?lesson?.id:page==='chat'?scene:page==='immersion'?story?.id:null};}
 function learningReadCurrent(context){return context.page===page&&context.nav===navigationRun&&context.ref===(page==='lessons'?lesson?.id:page==='chat'?scene:page==='immersion'?story?.id:null);}
@@ -18,7 +20,7 @@ function reviewCoverage(d){
 }
 function pronunciationHTML(p){
  if(!p)return '';
- return `<details class="pronunciation"><summary>拍数与声调辅助</summary><p>${p.count?`${p.count} 拍 · ${p.moras.map(esc).join(' · ')}`:'读音尚不能可靠分拍'}</p>${p.nucleus!==null?`<div class="pitch-line" aria-label="单独发音示意：${p.pattern.join('、')}">${p.moras.map((m,i)=>`<span class="pitch-mora ${p.pattern[i]==='高'?'high':'low'}">${esc(m)}${p.nucleus===i+1?'↘':''}</span>`).join('')}</div><p class="hint">${p.nucleus===0?'无下降核（平板型）':'第 '+p.nucleus+' 拍后下降'} · 单独发音示意，句中高低会变化。</p><button type="button" class="text-link" data-url="${esc(p.source)}">来源：${esc(p.source_label)}</button>`:'<p class="hint">此词声调暂无已核实数据，不依据 AI 猜测。可对照系统朗读；此处不进行发音评分。</p>'}<p class="hint">拗音合为一拍；ん、っ、ー各占一拍。声调示例目前收录「雨」「飴」。</p></details>`;
+ return `<details class="pronunciation"><summary>拍数与声调辅助</summary><p>${p.count?`${p.count} 拍 · ${p.moras.map(esc).join(' · ')}`:'读音尚不能可靠分拍'}</p>${p.nucleus!==null?`<div class="pitch-line" aria-label="单独发音示意：${p.pattern.join('、')}">${p.moras.map((m,i)=>`<span class="pitch-mora ${p.pattern[i]==='高'?'high':'low'}">${esc(m)}${p.nucleus===i+1?'↘':''}</span>`).join('')}</div><p class="hint">${p.nucleus===0?'无下降核（平板型）':'第 '+p.nucleus+' 拍后下降'} · 单独发音示意，句中高低会变化。</p><button type="button" class="text-link" data-url="${esc(p.source)}">来源：${esc(p.source_label)}</button>`:'<p class="hint">此词声调暂无已核实数据，不依据 AI 猜测。可对照朗读音频；此处不进行发音评分。</p>'}<p class="hint">拗音合为一拍；ん、っ、ー各占一拍。声调示例目前收录「雨」「飴」。</p></details>`;
 }
 function knowledgeHTML(){
  const items=state.knowledge||[];
@@ -35,11 +37,28 @@ function enhanceLearning(){
  if(page==='lessons'&&lesson&&$('#main [data-reading-text]'))void noteExposure(lesson.id);
  if(page==='immersion'&&story)void noteExposure(story.id);
  if(page==='chat'&&chatMessages.length)paintChat();
+ void loadVisibleReadings();
+}
+async function loadVisibleReadings(){
+ if(readingFlight)return;
+ const sentences=[...new Set([...document.querySelectorAll('[data-reading-text]')].map(el=>el.dataset.readingText))].filter(s=>s&&s.length<=1200&&!annotationChecked.has(s)&&!annotationCache.has(s)).slice(0,16);
+ if(!sentences.length)return;
+ readingFlight=true;
+ let loaded=false;
+ try{
+  const result=await rpc('reading_lookup',{sentences});
+  for(const s of result.checked)annotationChecked.add(s);
+  for(const item of result.items)annotationCache.set(item.sentence,item);
+  document.querySelectorAll('[data-reading-text]').forEach(el=>{if(annotationCache.has(el.dataset.readingText))el.innerHTML=readingHTML(el.dataset.readingText);});
+  loaded=true;
+ }catch(e){/* Cached annotations are optional; the explicit annotate action can retry. */}
+ finally{readingFlight=false;}
+ if(loaded)void loadVisibleReadings();
 }
 async function openDictionary(word,sentence=''){
  const request=++dictionaryRun,context=learningReadContext();
  await run('正在查词…',async()=>{
-  const result=await rpc('dictionary',{word,sentence});if(request!==dictionaryRun||!learningReadCurrent(context))return;dictionaryItem=result;const d=dictionaryItem;
+  const d=await rpc('dictionary',{word,sentence});if(request!==dictionaryRun||!learningReadCurrent(context))return;
   $('#modal-content').innerHTML=`<h2>${esc(d.word)}</h2>${d.queried!==d.word?`<p class="hint">原文 ${esc(d.queried)} → 辞书形 ${esc(d.word)}</p>`:''}<p class="reading">${esc(d.reading)} <span class="romaji">${esc(d.romaji)}</span></p><p>${esc(d.meaning)}</p>${d.context_meaning?`<p class="hint">本句用法：${esc(d.context_meaning)}</p>`:''}<p class="jp">${esc(d.example)}</p><p>${esc(d.translation)}</p>${pronunciationHTML(d.pronunciation)}${source(d)}<div class="inline-actions">${speak(d.word,true)}<button type="button" class="btn primary" data-dictionary-add="${esc(d.word)}">加入词卡</button><button type="button" class="btn" data-action="close-modal">关闭</button></div>`;
   if(!$('#modal').open)$('#modal').showModal();
  });
@@ -57,7 +76,7 @@ document.addEventListener('click',async e=>{
   },b);return;
  }
  if(b.dataset.lookup){await openDictionary(b.dataset.lookup,b.dataset.sentence||'');return;}
- if(b.dataset.dictionaryAdd){await run('正在加入词卡…',async()=>{await rpc('dictionary_add',{word:b.dataset.dictionaryAdd});await refresh();b.disabled=true;b.textContent='已加入词卡';toast('已加入词卡，相同词条不重复保存。');});return;}
+ if(b.dataset.dictionaryAdd){await run('正在加入词卡…',async()=>{acceptCardMutation(await rpc('dictionary_add',{word:b.dataset.dictionaryAdd,compact:true}));b.disabled=true;b.textContent='已加入词卡';toast('已加入词卡，相同词条不重复保存。');});return;}
  if(b.dataset.chatAction){
   const a=b.dataset.chatAction;
   if(a==='stop'){await stopChat();return;}
@@ -100,9 +119,11 @@ function paintChat(){
 async function loadChat(){
  const selected=scene,request=++chatLoadRun,nav=navigationRun;
  await run('正在找回对话…',async()=>{
-  const current=await rpc('chat_state',{scene:selected});
-  const [messages,memory]=await Promise.all([rpc('chat_history',{session:current.session}),rpc('chat_memory',{session:current.session})]);
-  if(request===chatLoadRun&&nav===navigationRun&&page==='chat'&&scene===selected){chatState={...current,memory};chatMessages=messages;paintChat();}
+  const snapshot=await rpc('chat_snapshot',{scene:selected});
+  if(request===chatLoadRun&&nav===navigationRun&&page==='chat'&&scene===selected){
+   for(const ref of snapshot.exposure_refs)viewedSources.add(ref);
+   chatState={...snapshot.state,memory:snapshot.memory};chatMessages=snapshot.messages;paintChat();void loadVisibleReadings();
+  }
  });
 }
 window.haruStream=(id,event)=>pending.get(id)?.onEvent?.(event);

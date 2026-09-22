@@ -1,5 +1,6 @@
 # Build on Windows: the windowed GUI and console IPC worker share one runtime.
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_submodules
 import os
 
 root = Path(SPECPATH).parent
@@ -15,9 +16,10 @@ else:
     extra_data.append((str(root / 'pyproject.toml'), '.'))
 gui = Analysis([str(root / 'native/windows_entry.py')], pathex=paths,
     datas=[(str(resources / 'ui'), 'ui'), (str(resources / 'data'), 'data'), (icon, 'ui')] + extra_data, binaries=extra_binaries,
-    hiddenimports=['webview.platforms.winforms', 'webview.platforms.edgechromium', 'edge_tts', 'edge_tts.communicate',],
+    hiddenimports=['webview.platforms.winforms', 'webview.platforms.edgechromium'] + collect_submodules('edge_tts'),
     excludes=['tkinter', 'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'webview.platforms.cef'])
-backend = Analysis([str(root / 'backend/bridge.py')], pathex=paths)
+backend = Analysis([str(root / 'backend/bridge.py')], pathex=paths,
+    hiddenimports=collect_submodules('edge_tts'))
 app = EXE(PYZ(gui.pure), gui.scripts, [], exclude_binaries=True,
     name='Haru', console=False, icon=icon, upx=False,
     version=str(root / 'build/windows/version.txt'))

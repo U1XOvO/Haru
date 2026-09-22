@@ -192,7 +192,7 @@ class Host:
             return {'ok': False, 'error': str(error)}
         except Exception:
             self.maintenance = False
-            return {'ok': False, 'error': '本地操作未完成，请检查文件、系统语音或设备设置后重试。已有记录已保留。'}
+            return {'ok': False, 'error': '本地操作未完成，请检查文件或音频设备设置后重试。已有记录已保留。'}
 
     def _loaded(self):
         from windows_updater import WindowsUpdater

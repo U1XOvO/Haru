@@ -9,7 +9,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timedelta
-from pathlib import Path
+from functools import lru_cache
 from llm import AppError, ROOT, public_config
 from study_generation import StudyGeneration
 from jlpt_blueprints import get_blueprint
@@ -43,6 +43,30 @@ def level(value):
 
 def load_data(name):
     return json.loads((DATA / name).read_text(encoding='utf-8'))
+
+
+@lru_cache(maxsize=1)
+def builtin_papers():
+    return load_data('papers.json')
+
+
+CATALOG_FIELDS = ('id', 'title', 'level', 'version', 'source_type', 'source',
+                  'source_url', 'model', 'configured_model', 'resources', 'notes')
+
+
+def paper_metadata(paper):
+    return dict({k: paper.get(k) for k in CATALOG_FIELDS},
+                count=len(paper['questions']), sections=paper['sections'])
+
+
+def page_bounds(p, key='offset', default=30):
+    return (number(p.get(key, 0), 0, 10_000_000, '分页位置'),
+            number(p.get('limit', default), 1, 100, '每页数量'))
+
+
+def page_info(offset, limit, total):
+    return dict(offset=offset, limit=limit, total=total,
+                next_offset=offset+limit if offset+limit < total else None)
 
 
 def validate_paper(raw, grammar_ids=()):
@@ -115,8 +139,71 @@ class Study(StudyGeneration):
             CREATE INDEX IF NOT EXISTS study_attempt_paper ON study_attempts(paper_id,updated);
         ''')
         self.init_generation()
-        if self.get('study_schema') != 1:
-            with self.db: self.set('study_schema', 1)
+        self.init_attempt_layout(backup_needed)
+
+    def init_attempt_layout(self, backup_needed=True):
+        """Additive, resumable migration; legacy rows remain an intact recovery copy."""
+        if self.get('study_attempt_layout') == 1 and self.get('study_schema') == 2:
+            return
+        if backup_needed and self.get('study_schema') == 1:
+            # Publish only a completed SQLite backup. A failed migration reuses it.
+            import sqlite3
+            folder = self.dir / 'backups'; folder.mkdir(exist_ok=True)
+            path = folder / 'before-study-layout-v2.sqlite3'
+            if not path.exists():
+                temp = path.with_suffix('.' + uuid.uuid4().hex + '.tmp')
+                target = sqlite3.connect(temp)
+                try: self.db.backup(target)
+                finally: target.close()
+                temp.replace(path)
+        self.db.executescript('''
+            CREATE TABLE IF NOT EXISTS study_attempt_snapshots(
+                id TEXT PRIMARY KEY, data TEXT NOT NULL, rules TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS study_attempt_states(
+                id TEXT PRIMARY KEY, paper_id TEXT NOT NULL, paper_version TEXT NOT NULL,
+                data TEXT NOT NULL, title TEXT NOT NULL, level TEXT NOT NULL,
+                source_type TEXT NOT NULL, mode TEXT NOT NULL, status TEXT NOT NULL,
+                deadline REAL, started REAL NOT NULL, correct INTEGER, total INTEGER NOT NULL,
+                answered INTEGER NOT NULL, updated REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS study_state_level_updated ON study_attempt_states(level,updated DESC,id DESC);
+            CREATE INDEX IF NOT EXISTS study_state_updated ON study_attempt_states(updated DESC,id DESC);
+            CREATE INDEX IF NOT EXISTS study_state_deadline ON study_attempt_states(deadline)
+                WHERE status='active' AND mode='timed';
+            CREATE INDEX IF NOT EXISTS study_state_status ON study_attempt_states(status);
+            CREATE TABLE IF NOT EXISTS study_paper_catalog(
+                id TEXT PRIMARY KEY, level TEXT NOT NULL, data TEXT NOT NULL, created REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS study_catalog_level ON study_paper_catalog(level,created DESC,id DESC);
+        ''')
+        # Triggers cover imports, generation and deletion in their original transaction.
+        pairs = ','.join("'%s',json_extract(NEW.data,'$.%s')" % (k, k) for k in CATALOG_FIELDS)
+        metadata = "json_object(" + pairs + ", 'count',json_array_length(NEW.data,'$.questions'), 'sections',json_extract(NEW.data,'$.sections'))"
+        for event in ('INSERT', 'UPDATE'):
+            self.db.execute(f'''CREATE TRIGGER IF NOT EXISTS study_catalog_{event.lower()}
+                AFTER {event} ON study_papers BEGIN
+                INSERT OR REPLACE INTO study_paper_catalog VALUES
+                    (NEW.id,json_extract(NEW.data,'$.level'),{metadata},NEW.created); END''')
+        self.db.execute('''CREATE TRIGGER IF NOT EXISTS study_catalog_delete AFTER DELETE ON study_papers
+            BEGIN DELETE FROM study_paper_catalog WHERE id=OLD.id; END''')
+        with self.db:
+            for row in self.db.execute('''SELECT p.id,p.data,p.created FROM study_papers p
+                    LEFT JOIN study_paper_catalog c ON c.id=p.id WHERE c.id IS NULL''').fetchall():
+                paper = json.loads(row['data'])
+                self.db.execute('INSERT INTO study_paper_catalog VALUES (?,?,?,?)',
+                                (row['id'], paper['level'], encode(paper_metadata(paper)), row['created']))
+        cursor = 0
+        while True:
+            rows = self.db.execute('''SELECT a.rowid AS legacy_rowid,a.id,a.data,a.updated FROM study_attempts a
+                LEFT JOIN study_attempt_states s ON s.id=a.id WHERE s.id IS NULL AND a.rowid>?
+                ORDER BY a.rowid LIMIT 50''', (cursor,)).fetchall()
+            if not rows: break
+            with self.db:
+                for row in rows:
+                    self._insert_attempt(json.loads(row['data']), row['updated'])
+            cursor = rows[-1]['legacy_rowid']
+        with self.db:
+            self.set('study_attempt_layout', 1)
+            # Older applications reject this version instead of reopening stale legacy rows.
+            self.set('study_schema', 2)
 
     def grammar_items(self):
         items=getattr(self,'_grammar_items_cache',None)
@@ -169,20 +256,22 @@ class Study(StudyGeneration):
 
     def study_catalog(self, p):
         lv = level(p.get('level', 'N5'))
-        papers = load_data('papers.json')
-        papers += [json.loads(r[0]) for r in self.db.execute('SELECT data FROM study_papers ORDER BY created DESC')]
-        rows = []
-        for d in papers:
-            if d['level'] == lv:
-                row = {k: d.get(k) for k in ('id', 'title', 'level', 'version', 'source_type', 'source', 'source_url', 'model', 'configured_model', 'resources', 'notes')}
-                row.update(count=len(d['questions']), sections=d['sections'])
-                rows.append(row)
-        return dict(level=lv, papers=rows, history=self.study_history({'level': lv}),
+        offset, limit = page_bounds(p, 'paper_offset')
+        official = [paper_metadata(d) for d in builtin_papers() if d['level'] == lv]
+        count = self.db.execute('SELECT COUNT(*) FROM study_paper_catalog WHERE level=?', (lv,)).fetchone()[0]
+        rows = official[offset:offset+limit]
+        if len(rows) < limit:
+            rows += [json.loads(r[0]) for r in self.db.execute('''SELECT data FROM study_paper_catalog
+                WHERE level=? ORDER BY created DESC,id DESC LIMIT ? OFFSET ?''',
+                (lv, limit-len(rows), max(0, offset-len(official))))]
+        history = self.study_history(dict(level=lv, offset=p.get('history_offset', 0), limit=limit, paged=True))
+        return dict(level=lv, papers=rows, papers_page=page_info(offset, limit, len(official)+count),
+                    history=history.pop('items'), history_page=history,
                     summary=self.study_summary({}), config=public_config(),
                     blueprint=get_blueprint(lv), generation=self.generation_pending())
 
     def _paper(self, identity):
-        for d in load_data('papers.json'):
+        for d in builtin_papers():
             if d['id'] == identity: return d
         row = self.db.execute('SELECT data FROM study_papers WHERE id=?', (identity,)).fetchone()
         if not row: raise AppError('找不到这份试卷。')
@@ -265,25 +354,56 @@ class Study(StudyGeneration):
         attempt = dict(id=uuid.uuid4().hex, paper=copy.deepcopy(paper), mode=mode, started=now,
             answers={}, flags=[], section_index=0, deadline=now+paper['sections'][0]['seconds'] if mode=='timed' else None,
             revision=0, status='active', elapsed=0, last_active=now)
-        with self.db: self.db.execute('INSERT INTO study_attempts VALUES (?,?,?,?)', (attempt['id'], paper['id'], encode(attempt), now))
+        with self.db: self._insert_attempt(attempt, now)
         return self._public_attempt(attempt)
 
+    @staticmethod
+    def _paper_rules(paper):
+        return dict({k: paper.get(k) for k in ('id', 'version', 'title', 'level', 'source_type', 'grammar_id')},
+                    sections=paper['sections'], questions=[dict(id=q['id'], section=q['section'],
+                    answer=q['answer'], skill=q['skill'], options_count=len(q['options'])) for q in paper['questions']])
+
+    def _state_values(self, a, updated):
+        paper = a.get('_rules') or self._paper_rules(a['paper'])
+        state = {k: v for k, v in a.items() if k not in ('paper', '_rules', 'server_now', 'delta')}
+        return (a['id'], paper['id'], str(paper['version']), encode(state), paper['title'], paper['level'],
+                paper['source_type'], a['mode'], a['status'], a['deadline'], a['started'],
+                a.get('result', {}).get('correct'), len(paper['questions']),
+                sum(v is not None for v in a['answers'].values()), updated)
+
+    def _insert_attempt(self, a, updated):
+        self.db.execute('INSERT OR IGNORE INTO study_attempt_snapshots VALUES (?,?,?)',
+                        (a['id'], encode(a['paper']), encode(self._paper_rules(a['paper']))))
+        self.db.execute('INSERT INTO study_attempt_states VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                        self._state_values(a, updated))
+
     def _attempt(self, identity):
-        row = self.db.execute('SELECT data FROM study_attempts WHERE id=?', (identity,)).fetchone()
+        row = self.db.execute('''SELECT s.data,p.data AS paper FROM study_attempt_states s
+            JOIN study_attempt_snapshots p ON p.id=s.id WHERE s.id=?''', (identity,)).fetchone()
         if not row: raise AppError('找不到这次作答。')
-        return json.loads(row[0])
+        return dict(json.loads(row['data']), paper=json.loads(row['paper']))
+
+    def _attempt_state(self, identity):
+        row = self.db.execute('''SELECT s.data,p.rules FROM study_attempt_states s
+            JOIN study_attempt_snapshots p ON p.id=s.id WHERE s.id=?''', (identity,)).fetchone()
+        if not row: raise AppError('找不到这次作答。')
+        return dict(json.loads(row['data']), _rules=json.loads(row['rules']))
 
     def _persist_attempt(self, a):
-        self.db.execute('UPDATE study_attempts SET data=?,updated=? WHERE id=?', (encode(a), time.time(), a['id']))
+        values = self._state_values(a, time.time())
+        self.db.execute('''UPDATE study_attempt_states SET paper_id=?,paper_version=?,data=?,title=?,
+            level=?,source_type=?,mode=?,status=?,deadline=?,started=?,correct=?,total=?,answered=?,updated=?
+            WHERE id=?''', values[1:] + (values[0],))
 
     def _tick(self, a):
         if a['status'] != 'active' or a['mode'] != 'timed': return
         now = time.time()
+        paper = a.get('paper') or a['_rules']
         while a['status'] == 'active' and now >= a['deadline']:
-            if a['section_index']+1 == len(a['paper']['sections']):
+            if a['section_index']+1 == len(paper['sections']):
                 self._finish(a); break
             a['section_index'] += 1
-            a['deadline'] += a['paper']['sections'][a['section_index']]['seconds']
+            a['deadline'] += paper['sections'][a['section_index']]['seconds']
             a['revision'] += 1
 
     def _public_attempt(self, a):
@@ -298,30 +418,52 @@ class Study(StudyGeneration):
         out['server_now'] = time.time()
         return out
 
+    def _public_state(self, a):
+        # Only mutable state crosses the bridge on saves and visible-page heartbeats.
+        return dict({k: v for k, v in a.items() if k not in ('paper', '_rules')},
+                    delta=True, server_now=time.time())
+
+    def _expire_attempts(self):
+        # Indexed candidates only; each short transaction handles one expired exam.
+        while True:
+            ids = [r[0] for r in self.db.execute('''SELECT id FROM study_attempt_states
+                WHERE status='active' AND mode='timed' AND deadline<=? ORDER BY deadline LIMIT 50''', (time.time(),))]
+            if not ids: return
+            for identity in ids:
+                with self.db:
+                    self.db.execute('BEGIN IMMEDIATE')
+                    a = self._attempt_state(identity); revision = a['revision']; self._tick(a)
+                    if a['revision'] != revision: self._persist_attempt(a)
+
     def study_attempt(self, p):
-        with self.db:
-            self.db.execute('BEGIN IMMEDIATE')
-            a = self._attempt(p.get('id')); revision = a['revision']; self._tick(a)
-            if a['revision'] != revision: self._persist_attempt(a)
-        return self._public_attempt(a)
+        identity = p.get('id')
+        state = self._attempt_state(identity)
+        if state['status'] == 'active' and state['mode'] == 'timed' and state['deadline'] <= time.time():
+            with self.db:
+                self.db.execute('BEGIN IMMEDIATE')
+                state = self._attempt_state(identity); revision = state['revision']; self._tick(state)
+                if state['revision'] != revision: self._persist_attempt(state)
+        return self._public_state(state) if p.get('state_only') else self._public_attempt(self._attempt(identity))
 
     def study_save(self, p):
         with self.db:
             self.db.execute('BEGIN IMMEDIATE')
-            a = self._attempt(p.get('id')); self._tick(a)
-            if a['status'] == 'submitted':
-                self._persist_attempt(a)
-                return self._public_attempt(a)
+            a = self._attempt_state(p.get('id')); before = a['revision']; self._tick(a)
+            if a['status'] == 'submitted' or a['revision'] != before:
+                # A deadline transition wins over a late answer from the old section.
+                if a['revision'] != before: self._persist_attempt(a)
+                return self._public_state(a)
             if p.get('revision') != a['revision']: raise AppError('作答已在其他页面更新，请重新打开以恢复最新答案。')
             patch = p.get('answers', {})
             if not isinstance(patch, dict): raise AppError('答案格式无效。')
-            byid = {q['id']: q for q in a['paper']['questions']}
-            current = a['paper']['sections'][a['section_index']]['id']
+            paper = a['_rules']
+            byid = {q['id']: q for q in paper['questions']}
+            current = paper['sections'][a['section_index']]['id']
             for identity, value in patch.items():
                 if identity not in byid: raise AppError('题号无效。')
                 q = byid[identity]
                 if a['mode'] == 'timed' and q['section'] != current: raise AppError('计时模式只能修改当前分区的答案。')
-                if value is not None: number(value, 0, len(q['options'])-1, '所选答案')
+                if value is not None: number(value, 0, q['options_count']-1, '所选答案')
                 a['answers'][identity] = value
             flags = p.get('flags', a['flags'])
             if not isinstance(flags, list) or any(f not in byid for f in flags): raise AppError('标记题号无效。')
@@ -331,17 +473,18 @@ class Study(StudyGeneration):
             if p.get('finish') is True: self._finish(a)
             elif p.get('next_section') is True:
                 if a['mode'] != 'timed': raise AppError('仅计时模式需要提交分区。')
-                if a['section_index']+1 == len(a['paper']['sections']): self._finish(a)
+                if a['section_index']+1 == len(paper['sections']): self._finish(a)
                 else:
                     a['section_index'] += 1
-                    a['deadline'] = now+a['paper']['sections'][a['section_index']]['seconds']
+                    a['deadline'] = now+paper['sections'][a['section_index']]['seconds']
             self._persist_attempt(a)
-        return self._public_attempt(a)
+        return self._public_state(a)
 
     def _finish(self, a):
         if a['status'] == 'submitted': return
+        paper = a.get('paper') or a['_rules']
         results = []
-        for q in a['paper']['questions']:
+        for q in paper['questions']:
             selected = a['answers'].get(q['id'])
             results.append(dict(id=q['id'], selected=selected, answer=q['answer'], correct=selected==q['answer'], skill=q['skill']))
         correct = sum(r['correct'] for r in results)
@@ -349,7 +492,7 @@ class Study(StudyGeneration):
             result=dict(correct=correct, total=len(results), percent=round(correct*100/len(results)),
                 unanswered=sum(r['selected'] is None for r in results), results=results,
                 skills={s: dict(correct=sum(r['correct'] for r in results if r['skill']==s), total=sum(r['skill']==s for r in results)) for s in SKILLS}))
-        gid = a['paper'].get('grammar_id')
+        gid = paper.get('grammar_id')
         if gid:
             row = self.db.execute('SELECT data FROM grammar_progress WHERE id=?', (gid,)).fetchone()
             d = json.loads(row[0]) if row else {}
@@ -362,30 +505,34 @@ class Study(StudyGeneration):
             self.db.execute('INSERT OR REPLACE INTO grammar_progress VALUES (?,?)', (gid, encode(d)))
 
     def study_history(self, p):
-        lv = p.get('level'); result = []
-        # Lazy expiration also applies to history, so a closed timed exam isn't "active" forever.
-        with self.db:
-            self.db.execute('BEGIN IMMEDIATE')
-            for row in self.db.execute('SELECT data FROM study_attempts ORDER BY updated DESC, rowid DESC').fetchall():
-                a = json.loads(row[0]); revision = a['revision']; self._tick(a)
-                if a['revision'] != revision: self._persist_attempt(a)
-                paper = a['paper']
-                if lv and paper['level'] != lv: continue
-                result.append(dict(id=a['id'], title=paper['title'], level=paper['level'], status=a['status'],
-                    started=a['started'], source_type=paper['source_type'], mode=a['mode'],
-                    correct=a.get('result',{}).get('correct'), total=len(paper['questions']),
-                    answered=sum(v is not None for v in a['answers'].values())))
-        return result
+        self._expire_attempts()
+        lv = p.get('level'); offset, limit = page_bounds(p)
+        if lv is not None: level(lv)
+        where, args = ('WHERE level=?', (lv,)) if lv else ('', ())
+        total = self.db.execute('SELECT COUNT(*) FROM study_attempt_states ' + where, args).fetchone()[0]
+        rows = [dict(r) for r in self.db.execute('''SELECT id,title,level,status,started,source_type,
+            mode,correct,total,answered FROM study_attempt_states ''' + where +
+            ' ORDER BY updated DESC,id DESC LIMIT ? OFFSET ?', args + (limit, offset))]
+        return dict(items=rows, **page_info(offset, limit, total)) if p.get('paged') else rows
 
     def study_mistakes(self, p):
-        lv = level(p.get('level', 'N5')); latest = {}
-        for row in self.db.execute('SELECT data FROM study_attempts ORDER BY updated'):
-            a = json.loads(row[0])
-            if a['status'] != 'submitted' or a['paper']['level'] != lv: continue
-            for q, result in zip(a['paper']['questions'], a['result']['results']):
-                latest[(a['paper']['id'], a['paper']['version'], q['id'])] = (a, q, result)
-        return [dict(attempt=a['id'], paper=a['paper']['id'], title=a['paper']['title'], question=q, selected=r['selected'])
-                for a,q,r in latest.values() if not r['correct']]
+        lv = level(p.get('level', 'N5'))
+        rows = self.db.execute('''WITH results AS (
+            SELECT s.id,s.paper_id,s.title,json_extract(r.value,'$.id') AS question_id,
+                json_extract(r.value,'$.selected') AS selected,json_extract(r.value,'$.correct') AS correct,
+                ROW_NUMBER() OVER (PARTITION BY s.paper_id,s.paper_version,json_extract(r.value,'$.id')
+                    ORDER BY s.updated DESC,s.rowid DESC) AS latest
+            FROM study_attempt_states s,json_each(s.data,'$.result.results') r
+            WHERE s.status='submitted' AND s.level=?)
+            SELECT id,paper_id,title,question_id,selected FROM results WHERE latest=1 AND correct=0''', (lv,))
+        snapshots = {}; result = []
+        for r in rows:
+            if r['id'] not in snapshots:
+                paper = json.loads(self.db.execute('SELECT data FROM study_attempt_snapshots WHERE id=?', (r['id'],)).fetchone()[0])
+                snapshots[r['id']] = {q['id']: q for q in paper['questions']}
+            result.append(dict(attempt=r['id'], paper=r['paper_id'], title=r['title'],
+                               question=snapshots[r['id']][r['question_id']], selected=r['selected']))
+        return result
 
     def study_retry(self, p):
         a = self._attempt(p.get('id'))
@@ -402,13 +549,15 @@ class Study(StudyGeneration):
         return self._start(paper, 'practice')
 
     def study_summary(self, p):
-        progress = [json.loads(r[0]) for r in self.db.execute('SELECT data FROM grammar_progress')]
+        self._expire_attempts()
         now = datetime.now().isoformat()
-        attempts = [json.loads(r[0]) for r in self.db.execute('SELECT data FROM study_attempts')]
-        return dict(read=sum(bool(g.get('read_at')) for g in progress), mastered=sum(bool(g.get('mastered')) for g in progress),
-            due=sum(bool(g.get('due')) and g['due'] <= now for g in progress),
-            submitted=sum(a['status']=='submitted' for a in attempts),
-            active=sum(a['status']=='active' for a in attempts))
+        progress = self.db.execute('''SELECT
+            COALESCE(SUM(COALESCE(json_extract(data,'$.read_at'),'')!=''),0) AS read,
+            COALESCE(SUM(COALESCE(json_extract(data,'$.mastered'),0)!=0),0) AS mastered,
+            COALESCE(SUM(COALESCE(json_extract(data,'$.due'),'')!='' AND json_extract(data,'$.due')<=?),0) AS due
+            FROM grammar_progress''', (now,)).fetchone()
+        counts = dict(self.db.execute('SELECT status,COUNT(*) FROM study_attempt_states GROUP BY status'))
+        return dict(progress, submitted=counts.get('submitted', 0), active=counts.get('active', 0))
 
     def study_asset_path(self, identity):
         if not isinstance(identity, str) or not re.fullmatch(r'[a-f0-9]{32}\.(?:pdf|mp3|m4a|wav|png|jpg)', identity):
@@ -424,7 +573,10 @@ class Study(StudyGeneration):
         return dict(url='data:image/'+('png' if path.suffix=='.png' else 'jpeg')+';base64,'+base64.b64encode(path.read_bytes()).decode())
 
     def study_export(self):
+        # Keep the established portable export format, reassembling snapshots only here.
         return dict(schema=1, grammar_progress=[dict(r) for r in self.db.execute('SELECT * FROM grammar_progress')],
             papers=[json.loads(r[0]) for r in self.db.execute('SELECT data FROM study_papers')],
-            attempts=[json.loads(r[0]) for r in self.db.execute('SELECT data FROM study_attempts')],
+            attempts=[dict(json.loads(r['data']), paper=json.loads(r['paper'])) for r in self.db.execute('''
+                SELECT s.data,p.data AS paper FROM study_attempt_states s
+                JOIN study_attempt_snapshots p ON p.id=s.id ORDER BY s.rowid''')],
             media_note='媒体保存在本机 study-assets 目录；JSON包含引用，不包含媒体二进制。')
