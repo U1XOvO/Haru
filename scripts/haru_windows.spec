@@ -15,7 +15,7 @@ else:
     extra_data.append((str(root / 'pyproject.toml'), '.'))
 gui = Analysis([str(root / 'native/windows_entry.py')], pathex=paths,
     datas=[(str(resources / 'ui'), 'ui'), (str(resources / 'data'), 'data'), (icon, 'ui')] + extra_data, binaries=extra_binaries,
-    hiddenimports=['webview.platforms.winforms', 'webview.platforms.edgechromium'],
+    hiddenimports=['webview.platforms.winforms', 'webview.platforms.edgechromium', 'edge_tts', 'edge_tts.communicate',],
     excludes=['tkinter', 'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'webview.platforms.cef'])
 backend = Analysis([str(root / 'backend/bridge.py')], pathex=paths)
 app = EXE(PYZ(gui.pure), gui.scripts, [], exclude_binaries=True,
