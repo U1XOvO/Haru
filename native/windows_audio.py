@@ -38,7 +38,11 @@ class WindowsAudio:
                     raise DesktopError('朗读文本无效。')
                 if self.speech is None:
                     import clr
-                    clr.AddReference('System.Speech')
+                    # Use the full identity so .NET can resolve the system assembly from the GAC.
+                    clr.AddReference(
+                        'System.Speech, Version=4.0.0.0, Culture=neutral, '
+                        'PublicKeyToken=31bf3856ad364e35'
+                    )
                     from System.Speech.Synthesis import SpeechSynthesizer
                     self.speech = SpeechSynthesizer()
                 voices = [voice.VoiceInfo for voice in self.speech.GetInstalledVoices()
