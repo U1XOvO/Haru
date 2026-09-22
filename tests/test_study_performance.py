@@ -1,4 +1,5 @@
 """Temporary-database regressions for snapshot/state separation and lightweight RPCs."""
+from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
@@ -140,7 +141,7 @@ class StudyPerformanceTests(unittest.TestCase):
 
     def make_legacy(self, count=52):
         self.app.close(); self.app = None
-        with sqlite3.connect(self.path / 'haru.sqlite3') as db:
+        with closing(sqlite3.connect(self.path / 'haru.sqlite3')) as db, db:
             for trigger in ('insert','update','delete'): db.execute('DROP TRIGGER study_catalog_'+trigger)
             for table in ('study_attempt_states','study_attempt_snapshots','study_paper_catalog'): db.execute('DROP TABLE '+table)
             db.execute("DELETE FROM kv WHERE key='study_attempt_layout'")
@@ -169,9 +170,9 @@ class StudyPerformanceTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'migration interruption'): Service(self.path)
         backup = self.path / 'backups/before-study-layout-v2.sqlite3'
         self.assertTrue(backup.exists()); backup_mtime = backup.stat().st_mtime_ns
-        with sqlite3.connect(backup) as db:
+        with closing(sqlite3.connect(backup)) as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM study_attempts').fetchone()[0], 52)
-        with sqlite3.connect(self.path / 'haru.sqlite3') as db:
+        with closing(sqlite3.connect(self.path / 'haru.sqlite3')) as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM study_attempt_states').fetchone()[0], 50)
             self.assertEqual(db.execute('SELECT COUNT(*) FROM study_attempt_snapshots').fetchone()[0], 50)
             self.assertEqual(db.execute("SELECT value FROM kv WHERE key='study_schema'").fetchone()[0], '1')
