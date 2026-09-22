@@ -151,7 +151,7 @@ class StudyGeneration:
         return dict(id=job['id'], level=job['level'], mode=job['mode'], status=job['status'], phase=phase,
             client_request_id=job.get('client_request_id',''),
             recovery_count=job.get('recovery_count',0),
-            recovery_message=job.get('recovery_message','') if waiting else job.get('recovery_message','') if job['status']=='failed' else '',
+            recovery_message=job.get('recovery_message','') if waiting or job['status']=='failed' else '',
             retry_at=job.get('retry_at',0) if waiting else 0,
             retry_after=min(60,max(0,math.ceil(job.get('retry_at',0)-time.time()))) if waiting else 0,
             resume_allowed=bool(job.get('resume_allowed',job['status']=='failed')) if job['status']=='failed' else False,

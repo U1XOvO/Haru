@@ -11,15 +11,15 @@ import threading
 def smoke_test(report):
     import webview
     from windows_app import Host, API
+    from windows_audio import WindowsAudio
     result = {'ok': False}
-    import clr
-    assembly = clr.AddReference('System.Speech, Version=4.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35')
-    result['speech_assembly_loaded'] = str(assembly.GetName().Name) == 'System.Speech'
     with tempfile.TemporaryDirectory(prefix='haru-app-smoke-') as directory:
         root = Path(directory)
         index = root / 'index.html'
         index.write_text('<html><body>Haru offline smoke</body></html>', encoding='utf-8')
         host = Host(root, index)
+        host.audio = WindowsAudio(root, host._recording_stopped)
+        result['speech_engine'] = host.audio.engine.engine
         host.window = webview.create_window('Haru offline smoke', index.as_uri(), js_api=API(host))
         host.window.events.before_show += host._before_show
         host.window.events.initialized += host._initialized

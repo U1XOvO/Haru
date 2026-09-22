@@ -28,7 +28,9 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
     var updaterController: SPUStandardUpdaterController?
     var pendingInstall: (() -> Void)?
     #endif
-    let speech = AVSpeechSynthesizer()
+    var speechGeneration = UUID()
+    var speechProcess: Process?
+    var speechReplyID: Int?
     var recorder: AVAudioRecorder?
     var player: AVAudioPlayer?
     var recordingTimer: Timer?
@@ -108,7 +110,7 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
     func fatalAlert(_ message:String) {let a=NSAlert(); a.messageText="Haru 暂时无法启动"; a.informativeText=message; a.runModal(); NSApp.terminate(nil)}
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool {true}
     func applicationWillTerminate(_ notification: Notification) {
-        recorder?.stop(); player?.stop(); speech.stopSpeaking(at:.immediate)
+        recorder?.stop(); stopAudio()
         processLock.lock()
         shuttingDown = true
         let children = Array(backendProcesses.values)
@@ -131,14 +133,21 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
     }
     func ok(_ id:Int,_ data:Any = [String:String]()) {reply(id,["ok":true,"data":data])}
     func fail(_ id:Int,_ error:String) {reply(id,["ok":false,"error":error])}
-    func registerBackendProcess(_ process: Process) -> Bool {
+    func registerBackendProcess(_ process: Process, speechToken: UUID? = nil) -> Bool {
         processLock.lock(); defer { processLock.unlock() }
         guard !shuttingDown else { return false }
+        if let token = speechToken {
+            guard token == speechGeneration else { return false }
+            speechProcess = process
+        }
         backendProcesses[process.processIdentifier] = process
         return true
     }
     func unregisterBackendProcess(_ process: Process) {
-        processLock.lock(); backendProcesses.removeValue(forKey: process.processIdentifier); processLock.unlock()
+        processLock.lock()
+        backendProcesses.removeValue(forKey: process.processIdentifier)
+        if speechProcess === process { speechProcess = nil }
+        processLock.unlock()
     }
     func stopBackendProcess(_ process: Process, grace: TimeInterval = 1.0) {
         guard process.isRunning else { return }
@@ -146,6 +155,55 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
         let deadline = Date().addingTimeInterval(grace)
         while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.025) }
         if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
+    }
+    func isCurrentSpeech(_ token: UUID) -> Bool {
+        processLock.lock(); defer { processLock.unlock() }
+        return !shuttingDown && speechGeneration == token
+    }
+    // Called on the main thread. Stop never waits for the synthesis network request.
+    func stopAudio() {
+        processLock.lock()
+        speechGeneration = UUID()
+        let process = speechProcess
+        speechProcess = nil
+        processLock.unlock()
+        player?.stop(); player = nil
+        if let id = speechReplyID { speechReplyID = nil; ok(id) }
+        if let process { queue.async { self.stopBackendProcess(process) } }
+    }
+    func speechFile(_ data: [String:Any]) -> URL? {
+        guard let name = data["audio"] as? String,
+              name.range(of:"^[a-f0-9]{32}\\.mp3$", options:.regularExpression) != nil else { return nil }
+        let folder = dataDir.appendingPathComponent("tts-cache", isDirectory:true).resolvingSymlinksInPath()
+        let file = folder.appendingPathComponent(name)
+        guard let info = try? file.resourceValues(forKeys:[.isRegularFileKey, .isSymbolicLinkKey]),
+              info.isRegularFile == true, info.isSymbolicLink != true,
+              file.resolvingSymlinksInPath().deletingLastPathComponent().path == folder.path else { return nil }
+        return file
+    }
+    func startSpeech(_ id: Int, _ params: [String:Any]) {
+        guard let text = params["text"] as? String, !text.isEmpty, text.unicodeScalars.count <= 6000 else {
+            fail(id,"朗读文本无效。"); return
+        }
+        stopAudio()
+        processLock.lock(); let token = speechGeneration; processLock.unlock()
+        speechReplyID = id
+        runBackend(id,"speech_prepare",params,speechToken:token) { result in
+            let data = result["data"] as? [String:Any] ?? [:]
+            guard self.isCurrentSpeech(token) else { return }
+            self.speechReplyID = nil
+            guard result["ok"] as? Bool == true else {
+                self.fail(id,result["error"] as? String ?? "日语语音生成失败，请重试。"); return
+            }
+            if data["cancelled"] as? Bool == true { self.ok(id); return }
+            guard let audio = result["_speechAudio"] as? Data else { self.fail(id,"朗读音频不可用，请重试。"); return }
+            do {
+                let player = try AVAudioPlayer(data:audio)
+                guard player.play() else { self.fail(id,"音频无法播放，请检查输出设备。"); return }
+                self.player = player
+                self.ok(id)
+            } catch { self.fail(id,"音频无法播放，请检查输出设备后重试。") }
+        }
     }
     func userContentController(_ userContentController: WKUserContentController,didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame, message.frameInfo.request.url?.isFileURL == true,
@@ -187,7 +245,7 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
                 }
                 self.runBackend(id,"import_legacy",["source":source.path])
             }
-        case "prepare_update", "recover_storage":
+        case "prepare_update", "recover_storage", "speech_prepare":
             fail(id,"此操作只能由应用内部发起。")
         case "study_pick":
             let panel=NSOpenPanel(); panel.allowsMultipleSelection=false; panel.canChooseDirectories=false
@@ -219,16 +277,13 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
             let file=folder.appendingPathComponent(identity).resolvingSymlinksInPath()
             guard file.deletingLastPathComponent().path==folder.path,FileManager.default.fileExists(atPath:file.path) else{fail(id,"媒体文件不存在。");return}
             if ["mp3","m4a","wav"].contains(file.pathExtension){
-                do{player?.stop();speech.stopSpeaking(at:.immediate);player=try AVAudioPlayer(contentsOf:file);player?.play();ok(id)}
+                do{stopAudio();player=try AVAudioPlayer(contentsOf:file);player?.play();ok(id)}
                 catch{fail(id,"音频无法播放，请检查导入文件。")}
             }else{NSWorkspace.shared.open(file);ok(id)}
         case "study_stop_audio":
-            player?.stop();speech.stopSpeaking(at:.immediate);ok(id)
+            stopAudio();ok(id)
         case "speak":
-            guard let text=p["text"] as? String,!text.isEmpty,text.count<=6000 else{fail(id,"朗读文本无效。");return}
-            guard let voice=AVSpeechSynthesisVoice(language:"ja-JP") else{fail(id,"未找到日语语音，请在系统设置的辅助功能中添加日语语音。");return}
-            speech.stopSpeaking(at:.immediate)
-            let utterance=AVSpeechUtterance(string:text); utterance.voice=voice; utterance.rate=0.42; speech.speak(utterance); ok(id)
+            startSpeech(id,p)
         case "open_url":
             guard let raw=p["url"] as? String,let url=URL(string:raw),url.scheme=="https",
                   ["www.jpf.go.jp","www.jlpt.jp","bunpro.jp","www.irodori.jpf.go.jp"].contains(url.host ?? "") else{fail(id,"仅允许打开已核实的教学来源 HTTPS 地址。");return}
@@ -248,14 +303,14 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
             recorder?.stop();recordingTimer?.invalidate();ok(id)
         case "record_play":
             if recorder?.isRecording == true {fail(id,"请先停止录音。");return}
-            do {player=try AVAudioPlayer(contentsOf:dataDir.appendingPathComponent("speaking-latest.m4a")); player?.play();ok(id)}
+            do {stopAudio();player=try AVAudioPlayer(contentsOf:dataDir.appendingPathComponent("speaking-latest.m4a")); player?.play();ok(id)}
             catch {fail(id,"还没有可回放的录音，请先录下你的跟读。")}
         default: runBackend(id,action,p)
         }
     }
     func startRecording(_ id:Int) {
         do {
-            player?.stop();speech.stopSpeaking(at:.immediate)
+            stopAudio()
             let file=dataDir.appendingPathComponent("speaking-latest.m4a")
             recorder=try AVAudioRecorder(url:file,settings:[AVFormatIDKey:kAudioFormatMPEG4AAC,AVSampleRateKey:44100,AVNumberOfChannelsKey:1,AVEncoderAudioQualityKey:AVAudioQuality.high.rawValue])
             guard recorder?.record(forDuration:60) == true else {fail(id,"无法启动麦克风，请检查音频输入设备。");return}
@@ -264,17 +319,26 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
             ok(id)
         } catch {fail(id,"录音启动失败，请检查麦克风与本地文件权限。")}
     }
-    func runBackend(_ id:Int,_ action:String,_ params:[String:Any]) {
-        let actions:Set<String>=["import_legacy","prepare_update","recover_storage","config_get","config_save","grammar_catalog","grammar_detail","grammar_mark","grammar_practice","study_catalog","study_import","study_generate","study_generation_start","study_generation_step","study_generation_status","study_generation_cancel","study_delete","study_start","study_attempt","study_save","study_history","study_mistakes","study_retry","study_summary","study_image","annotate","dictionary","dictionary_add","encounter","knowledge","chat_state","chat_start","chat_finish","chat_memory","chat_stream","chat_cancel","daily_word","daily_word_add","bootstrap","profile","lesson","grade","cards","card_create","card_random","card_seed","review","chat","chat_history","decode","quiz","immersion","export","ping","history","curriculum","stage_assessment","remedial"]
-        guard actions.contains(action),let input=try? JSONSerialization.data(withJSONObject:["action":action,"params":params]),input.count<=100000 else{fail(id,"操作无效或输入过长。");return}
+    func runBackend(_ id:Int,_ action:String,_ params:[String:Any], speechToken:UUID? = nil, completion:(([String:Any])->Void)? = nil) {
+        let actions:Set<String>=["import_legacy","prepare_update","recover_storage","config_get","config_save","grammar_catalog","grammar_detail","grammar_mark","grammar_practice","study_catalog","study_import","study_generate","study_generation_start","study_generation_step","study_generation_status","study_generation_cancel","study_delete","study_start","study_attempt","study_save","study_history","study_mistakes","study_retry","study_summary","study_image","annotate","dictionary","dictionary_add","encounter","encounters","reading_lookup","knowledge","chat_state","chat_snapshot","chat_start","chat_finish","chat_memory","chat_stream","chat_cancel","daily_word","daily_word_add","bootstrap","profile","lesson","grade","cards","card_queue","cards_page","card_detail","card_create","card_random","card_seed","review","chat","chat_history","decode","quiz","immersion","export","ping","history","curriculum","stage_assessment","remedial"]
+        let finish: ([String:Any]) -> Void = { result in
+            DispatchQueue.main.async {
+                if let completion { completion(result) } else { self.reply(id,result) }
+            }
+        }
+        guard actions.contains(action) || (action == "speech_prepare" && speechToken != nil),
+              let input=try? JSONSerialization.data(withJSONObject:["action":action,"params":params]),input.count<=100000 else {
+            finish(["ok":false,"error":"操作无效或输入过长。"]); return
+        }
         let interpreter=python;let project=root!;let storage=dataDir!
         queue.async {
+            if let token = speechToken, !self.isCurrentSpeech(token) { return }
             let process=Process(); process.executableURL=URL(fileURLWithPath:interpreter); process.arguments=self.bundledBackend ? [] : [project.appendingPathComponent("backend/bridge.py").path]; process.currentDirectoryURL=project
             var env=ProcessInfo.processInfo.environment;env["HARU_DATA_DIR"]=storage.path;env["HARU_STORAGE_DIR"]=self.storageRoot.path; env["PYTHONDONTWRITEBYTECODE"]="1";process.environment=env
             let stdin=Pipe();let stdout=Pipe();process.standardInput=stdin;process.standardOutput=stdout;process.standardError=FileHandle.nullDevice
             do {
                 try process.run()
-                guard self.registerBackendProcess(process) else {
+                guard self.registerBackendProcess(process, speechToken:speechToken) else {
                     self.stopBackendProcess(process, grace: 0.1)
                     process.waitUntilExit()
                     return
@@ -291,7 +355,8 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
                         self.stopBackendProcess(process)
                     }
                 }
-                DispatchQueue.global().asyncAfter(deadline:.now()+self.backendDeadlineSeconds,execute:watchdog)
+                let deadline = speechToken == nil ? self.backendDeadlineSeconds : 55
+                DispatchQueue.global().asyncAfter(deadline:.now()+deadline,execute:watchdog)
                 var result: [String:Any]?
                 if action == "chat_stream" {
                     var buffer=Data()
@@ -321,11 +386,21 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
                     self.processLock.unlock()
                     if let active { self.stopBackendProcess(active) }
                 }
+                let speechData = result?["data"] as? [String:Any]
                 if didTimeOut {
-                    result=["ok":false,"error":"操作超过10分钟上限，后台任务已停止。请确认任务状态后重试。"]
+                    result=["ok":false,"error":speechToken == nil ? "操作超过10分钟上限，后台任务已停止。请确认任务状态后重试。" : "语音生成超时，请检查网络后重试。"]
                 } else if action == "chat_stream",result == nil {result=["ok":false,"error":"生成已停止或连接中断，本轮未保存。"]}
-                DispatchQueue.main.async {if let r=result{self.reply(id,r)}else{self.fail(id,"本地服务未返回结果，请重新打开或重新安装 Haru。")}}
-            } catch {DispatchQueue.main.async{self.fail(id,"无法启动 Haru 运行组件，请重新构建或重新安装。")}}
+                if let token = speechToken, let data = speechData, let file = self.speechFile(data) {
+                    // Load away from the UI thread and release transient files even when
+                    // shutdown prevents the queued main-thread completion from running.
+                    defer { if data["transient"] as? Bool == true { try? FileManager.default.removeItem(at:file) } }
+                    if !didTimeOut && self.isCurrentSpeech(token) {
+                        if let audio = try? Data(contentsOf:file) { result?["_speechAudio"] = audio }
+                        else { result = ["ok":false,"error":"朗读音频不可用，请重试。"] }
+                    }
+                }
+                finish(result ?? ["ok":false,"error":"本地服务未返回结果，请重新打开或重新安装 Haru。"])
+            } catch { finish(["ok":false,"error":"无法启动 Haru 运行组件，请重新构建或重新安装。"]) }
         }
     }
     func finishSmoke(_ success:Bool) {

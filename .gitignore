@@ -25,7 +25,10 @@
 !/backend/lesson_design.py
 !/backend/llm.py
 !/backend/progression.py
+!/backend/performance.py
 !/backend/service.py
+!/backend/speech.py
+!/backend/speech_worker.py
 !/backend/study.py
 !/backend/study_generation.py
 !/data/builtin_lessons.json
@@ -82,4 +85,15 @@
 !/scripts/signing_setup.py
 !/tests/test_distribution.py
 !/tests/test_release_ui.js
+!/tests/test_cards_performance.py
+!/tests/test_cards_ui.js
+!/tests/test_performance.py
+!/tests/test_performance_ui.js
+!/tests/test_study_performance.py
+!/tests/test_study_performance_ui.js
+!/tests/test_windows_audio.py
+!/tests/test_speech.py
+!/tests/test_speech_bridge.py
+!/tests/test_speech_ui.js
+!/tests/test_macos_speech.py
 !/ui/release.js

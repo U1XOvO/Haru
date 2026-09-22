@@ -14,8 +14,8 @@ BACKEND_ACTIONS = frozenset('''import_legacy prepare_update recover_storage conf
 grammar_practice study_catalog study_import study_generate study_generation_start study_generation_step
 study_generation_status study_generation_cancel study_delete study_start study_attempt study_save
 study_history study_mistakes study_retry study_summary study_image annotate dictionary dictionary_add
-encounter knowledge chat_state chat_start chat_finish chat_memory chat_stream chat_cancel daily_word
-daily_word_add bootstrap profile lesson grade cards card_create card_random card_seed review chat
+encounter encounters reading_lookup knowledge chat_state chat_snapshot chat_start chat_finish chat_memory chat_stream chat_cancel daily_word
+daily_word_add bootstrap profile lesson grade cards card_queue cards_page card_detail card_create card_random card_seed review chat
 chat_history decode quiz immersion export ping history curriculum stage_assessment remedial'''.split())
 
 

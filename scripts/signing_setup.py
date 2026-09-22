@@ -1,6 +1,5 @@
 """Ephemeral CI signing setup. Do not print secrets or failing command arguments."""
 import base64
-import json
 import os
 from pathlib import Path
 import secrets

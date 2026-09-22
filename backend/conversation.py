@@ -29,7 +29,7 @@ class Conversation:
         with self.db:
             if 'started' not in {r[1] for r in self.db.execute('PRAGMA table_info(chat_requests)')}:
                 self.db.execute('ALTER TABLE chat_requests ADD COLUMN started REAL NOT NULL DEFAULT 0')
-            self.db.execute("UPDATE chat_requests SET status='failed' WHERE status='active' AND started < unixepoch()-300")
+            self.expire_chat_requests()
 
     def chat_state(self, p):
         scene = p.get('scene', 'cafe')
@@ -39,7 +39,21 @@ class Conversation:
         return dict(scene=scene, session=r['id'], goals=SCENARIOS[scene], status=r['status'],
                     report=json.loads(r['report']) if r['report'] else None)
 
+    def chat_snapshot(self, p):
+        state = self.chat_state(p)
+        messages = self.chat_history({'session': state['session']})
+        memory = self.chat_memory(state['session'])
+        refs = ['message:' + str(m['message_id']) for m in messages if m['role'] == 'assistant']
+        if refs:
+            self.encounters({'refs': refs})
+        return dict(state=state, messages=messages, memory=memory, exposure_refs=refs)
+
+    def expire_chat_requests(self):
+        with self.db:
+            self.db.execute("UPDATE chat_requests SET status='failed' WHERE status='active' AND started < unixepoch()-300")
+
     def chat_start(self, p):
+        self.expire_chat_requests()
         scene = p.get('scene', 'cafe')
         if scene not in SCENARIOS: raise AppError('场景不存在。')
         with self.db:
@@ -141,6 +155,7 @@ class Conversation:
         return {'status': status}
 
     def chat_stream(self, p, emit):
+        self.expire_chat_requests()
         token = self.request_id(p)
         session, msg, context = self.chat_context(p)
         with self.db:
@@ -167,6 +182,7 @@ class Conversation:
                 self.db.execute("UPDATE chat_requests SET status='failed' WHERE id=? AND status='active'", (token,))
 
     def chat_finish(self, p):
+        self.expire_chat_requests()
         session = p.get('session')
         row = self.db.execute('SELECT * FROM chat_runs WHERE id=?', (session,)).fetchone()
         if not row: raise AppError('请先开始场景任务。')

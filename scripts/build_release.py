@@ -12,11 +12,11 @@ import sys
 from app_config import bundle_info
 from app_version import version
 from fetch_release_tools import fetch
+from release_feed import validate_release_tag
 
 ROOT = Path(__file__).resolve().parents[1]
 WORK = ROOT / 'build/release'
 OUTPUT = ROOT / 'dist/installers'
-REPOSITORY = 'U1XOvO/Haru'
 
 
 def run(args, **kwargs):
@@ -49,19 +49,21 @@ def resources():
     return staging
 
 
-def metadata(signed, updates=False):
+def metadata(signed, updates=False, channel=None):
     arch = 'arm64' if platform.machine().lower() in {'arm64','aarch64'} else 'x64'
     target = ('macos-' if sys.platform == 'darwin' else 'windows-') + arch
-    updates = updates or signed
+    updates = bool(updates or signed)
     if updates:
         require('HARU_UPDATE_PUBLIC_KEY')
         import base64
         if len(base64.b64decode(os.environ['HARU_UPDATE_PUBLIC_KEY'], validate=True)) != 32:
             raise ValueError('Expected an Ed25519 public key')
-    channel = 'stable' if signed else 'preview'
-    tag = os.environ.get('HARU_RELEASE_TAG', 'v' + version() + ('' if signed else '-preview'))
-    result = dict(schema=1, version=version(), distribution='release' if signed else 'preview', channel=channel,
-                  platform=target, updates_enabled=updates, release_tag=tag,
+    channel = channel if channel is not None else ('stable' if signed else 'preview')
+    app_version = version()
+    tag = os.environ.get('HARU_RELEASE_TAG', 'v' + app_version + ('' if channel == 'stable' else '-preview'))
+    validate_release_tag(app_version, channel, tag)
+    result = dict(schema=1, version=app_version, distribution='release' if channel == 'stable' else 'preview', channel=channel,
+                  platform=target, publisher_signed=bool(signed), updates_enabled=updates, release_tag=tag,
                   feed_url=f'https://u1xovo.github.io/Haru/updates/{channel}/{target}.xml',
                   public_key=os.environ.get('HARU_UPDATE_PUBLIC_KEY', '') if updates else '')
     path = WORK / 'app-release.json'
@@ -188,15 +190,16 @@ def build_macos(signed, resource_dir, meta):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('--signed',action='store_true',help='Require signing credentials and enable verified updates')
-    parser.add_argument('--updates',action='store_true',help='Enable the Ed25519-verified preview update channel without publisher certificates')
+    parser.add_argument('--signed',action='store_true',help='Require OS publisher signing credentials and enable verified updates')
+    parser.add_argument('--updates',action='store_true',help='Enable Ed25519-verified updates without requiring publisher certificates')
+    parser.add_argument('--channel',choices=('stable','preview'),help='Release channel (default: stable with --signed, otherwise preview)')
     args=parser.parse_args()
     if sys.platform not in {'win32','darwin'}: parser.error('Build on Windows or macOS')
     WORK.mkdir(parents=True,exist_ok=True);OUTPUT.mkdir(parents=True,exist_ok=True)
-    if args.signed:
+    if args.signed or args.channel == 'stable':
         if run(['git','status','--porcelain'],capture_output=True).stdout.strip():
-            raise RuntimeError('Signed releases require a clean checkout')
-    meta,info=metadata(args.signed,args.updates)
+            raise RuntimeError('Stable or publisher-signed releases require a clean checkout')
+    meta,info=metadata(args.signed,args.updates,args.channel)
     resource_dir=resources()
     artifact=(build_windows if sys.platform=='win32' else build_macos)(args.signed,resource_dir,meta)
     report=dict(info,artifact=artifact.name)

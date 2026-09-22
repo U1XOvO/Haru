@@ -10,7 +10,6 @@ from pathlib import Path
 
 from dotenv import dotenv_values, set_key
 from app_paths import resource_root, storage_root
-import sys
 
 ROOT = resource_root()
 class AppError(Exception): pass

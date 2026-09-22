@@ -131,7 +131,7 @@ class DistributionTests(unittest.TestCase):
             name='Haru-1.1.0-'+platform+'.bin'
             payload=('fixture-'+platform).encode()
             (self.root/name).write_bytes(payload)
-            report=dict(platform=platform,version='1.1.0',distribution='preview',updates_enabled=True,
+            report=dict(platform=platform,version='1.1.0',distribution='preview',publisher_signed=False,updates_enabled=True,
                 channel='preview',release_tag='v1.1.0-preview.1',artifact=name,length=len(payload),
                 signature=base64.b64encode(key.sign(payload)).decode(),
                 public_key=base64.b64encode(key.public_key().public_bytes_raw()).decode())
@@ -143,6 +143,19 @@ class DistributionTests(unittest.TestCase):
             path.write_text(json.dumps(report))
         generate(self.root,self.root/'feeds','1.1.0','Stable notes')
         self.assertEqual(len(list((self.root/'feeds/stable').glob('*.xml'))),3)
+        path,report=reports[0]
+        package=self.root/report['artifact'];original=package.read_bytes()
+        package.write_bytes(b'x'*len(original))
+        with self.assertRaises(InvalidSignature):generate(self.root,self.root/'feeds','1.1.0','Stable notes')
+        package.write_bytes(original)
+        for channel, tag in [('stable','v1.1.0-preview.1'), ('stable','v1.2.0'),
+                             ('preview','v1.1.0'), ('preview','v1.2.0-preview.1')]:
+            with self.subTest(channel=channel, tag=tag):
+                for path, report in reports:
+                    report.update(channel=channel, distribution='release' if channel=='stable' else 'preview', release_tag=tag)
+                    path.write_text(json.dumps(report))
+                with self.assertRaisesRegex(ValueError, 'Release tag'):
+                    generate(self.root,self.root/'feeds','1.1.0','Test')
         for path, report in reports:
             report.update(channel='preview', distribution='preview', release_tag='v1.1.0-preview.1')
             path.write_text(json.dumps(report))
@@ -153,6 +166,63 @@ class DistributionTests(unittest.TestCase):
         package.write_bytes(original)
         report['channel']='stable';path.write_text(json.dumps(report))
         with self.assertRaises(ValueError):generate(self.root,self.root/'feeds','1.1.0','Test')
+
+
+class ReleaseMetadataTests(unittest.TestCase):
+    def setUp(self):
+        import base64
+        import build_release
+        temporary = tempfile.TemporaryDirectory(prefix='haru-release-metadata-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.build = build_release
+        self.public_key = base64.b64encode(bytes(range(32))).decode()
+        for patcher in (patch.object(build_release, 'WORK', self.root),
+                        patch.object(build_release, 'version', return_value='1.2.0'),
+                        patch.dict(os.environ, {'HARU_UPDATE_PUBLIC_KEY': self.public_key}, clear=True)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_unsigned_stable_enables_verified_updates_without_publisher_credentials(self):
+        path, info = self.build.metadata(False, updates=True, channel='stable')
+        self.assertEqual(json.loads(path.read_text()), info)
+        self.assertEqual(info['version'], '1.2.0')
+        self.assertEqual(info['distribution'], 'release')
+        self.assertEqual(info['channel'], 'stable')
+        self.assertEqual(info['release_tag'], 'v1.2.0')
+        self.assertIs(info['publisher_signed'], False)
+        self.assertIs(info['updates_enabled'], True)
+        self.assertEqual(info['public_key'], self.public_key)
+        self.assertTrue(info['feed_url'].endswith('/stable/' + info['platform'] + '.xml'))
+
+    def test_publisher_signing_and_channel_are_independent_and_defaults_are_preserved(self):
+        for signed, channel, expected_channel in [(False,None,'preview'), (True,None,'stable'), (True,'preview','preview')]:
+            with self.subTest(signed=signed, channel=channel):
+                _, info = self.build.metadata(signed, channel=channel)
+                self.assertEqual(info['channel'], expected_channel)
+                self.assertEqual(info['distribution'], 'release' if expected_channel=='stable' else 'preview')
+                self.assertIs(info['publisher_signed'], signed)
+                self.assertIs(info['updates_enabled'], signed)
+                self.assertEqual(info['release_tag'], 'v1.2.0' + ('-preview' if expected_channel=='preview' else ''))
+        with patch.dict(os.environ, {'HARU_RELEASE_TAG':'v1.2.0-preview.7'}):
+            self.assertEqual(self.build.metadata(True, channel='preview')[1]['release_tag'], 'v1.2.0-preview.7')
+
+    def test_metadata_rejects_mismatched_release_tags_and_invalid_channels(self):
+        for channel, tag in [('stable','v1.2.0-preview.1'), ('stable','v1.1.0'),
+                             ('preview','v1.2.0'), ('preview','v1.1.0-preview.1')]:
+            with self.subTest(channel=channel, tag=tag), patch.dict(os.environ, {'HARU_RELEASE_TAG':tag}):
+                with self.assertRaisesRegex(ValueError, 'Release tag'):
+                    self.build.metadata(False, updates=True, channel=channel)
+                self.assertFalse((self.root / 'app-release.json').exists())
+        with self.assertRaisesRegex(ValueError, 'Invalid release channel'):
+            self.build.metadata(False, channel='other')
+
+    def test_verified_updates_still_require_a_valid_public_key(self):
+        with patch.dict(os.environ, {}, clear=True), self.assertRaisesRegex(RuntimeError, 'HARU_UPDATE_PUBLIC_KEY'):
+            self.build.metadata(False, updates=True, channel='stable')
+        for key in ('invalid-base64', 'YQ=='):
+            with self.subTest(key=key), patch.dict(os.environ, {'HARU_UPDATE_PUBLIC_KEY':key}), self.assertRaises(ValueError):
+                self.build.metadata(False, updates=True, channel='stable')
 
 
 if __name__ == '__main__': unittest.main()

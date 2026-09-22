@@ -1,7 +1,6 @@
 """WinSparkle owns download, EdDSA verification and installer execution."""
 import ctypes
 import json
-from pathlib import Path
 
 from app_paths import resource_root
 from desktop_bridge import DesktopError

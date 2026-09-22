@@ -1,4 +1,4 @@
-"""Publishable appcasts generated only from a complete signed platform matrix."""
+"""Publishable appcasts generated only from a complete Ed25519-signed platform matrix."""
 import argparse
 import base64
 from datetime import datetime, timezone
@@ -13,6 +13,14 @@ ET.register_namespace('sparkle', SPARKLE)
 PLATFORMS = {'windows-x64', 'macos-arm64', 'macos-x64'}
 
 
+def validate_release_tag(version, channel, tag):
+    if channel not in {'stable', 'preview'}:
+        raise ValueError('Invalid release channel')
+    pattern = re.escape('v' + version) + (r'-preview(?:\.\d+)?' if channel == 'preview' else '')
+    if not isinstance(tag, str) or not re.fullmatch(pattern, tag):
+        raise ValueError('Release tag does not match version and channel')
+
+
 def generate(artifacts, output, version, notes):
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     if not re.fullmatch(r'\d+\.\d+\.\d+', version): raise ValueError('Invalid version')
@@ -24,14 +32,13 @@ def generate(artifacts, output, version, notes):
     if len(channels)!=1 or not channels <= {'stable','preview'} or len(tags)!=1:
         raise ValueError('Mixed release channels or tags')
     channel=channels.pop();tag=tags.pop()
-    if not isinstance(tag,str) or not re.fullmatch(r'v\d+\.\d+\.\d+(?:-preview(?:\.\d+)?)?',tag):
-        raise ValueError('Invalid release tag')
+    validate_release_tag(version, channel, tag)
     output = Path(output)/channel;output.mkdir(parents=True,exist_ok=True)
     for report in reports:
         if report['version'] != version or report['updates_enabled'] is not True:
             raise ValueError('Mixed versions or unsigned update payloads cannot be published')
         if report['distribution'] != ('release' if channel=='stable' else 'preview'):
-            raise ValueError('Publisher signing and channel do not match')
+            raise ValueError('Distribution and channel do not match')
         signature = report['signature']
         if len(base64.b64decode(signature,validate=True)) != 64: raise ValueError('Missing Ed25519 signature')
         name = report['artifact']
