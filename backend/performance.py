@@ -14,7 +14,6 @@ def initialize(db):
         CREATE INDEX IF NOT EXISTS events_ref_created ON events(ref,created);
         CREATE INDEX IF NOT EXISTS events_kind_created ON events(kind,created);
         CREATE INDEX IF NOT EXISTS events_created ON events(created);
-        CREATE INDEX IF NOT EXISTS messages_session_id ON messages(session,id);
         CREATE INDEX IF NOT EXISTS cards_due ON cards(due);
         CREATE INDEX IF NOT EXISTS cards_example ON cards(json_extract(data,'$.example'));
         CREATE TABLE IF NOT EXISTS activity_daily(day TEXT PRIMARY KEY,count INTEGER NOT NULL);

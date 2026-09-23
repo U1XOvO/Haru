@@ -12,10 +12,10 @@ import unicodedata
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from curriculum import TOPICS, KANA, SEEDS, CARDS
-from llm import AppError, generate, public_config, editable_config, save_config
+from llm import AppError, generate, public_config
+from llm_config import editable_config, save_config
 from app_paths import storage_root
 from learning import Learning, pronunciation
-from conversation import Conversation
 from progression import stage_info, course_spec, stage_courses
 from study import Study
 from lesson_design import LESSON, RULES as LESSON_RULES, VERSION as LESSON_VERSION, validate_design
@@ -73,7 +73,7 @@ def visible_test(obj):
         q.pop('answer',None); q.pop('explanation',None)
     return o
 
-class Service(Learning, Conversation, Study):
+class Service(Learning, Study):
     def __init__(self, data_dir=None):
         self.dir=Path(data_dir or os.environ.get('HARU_DATA_DIR') or storage_root()/'runtime')
         self.dir.mkdir(parents=True,exist_ok=True)
@@ -124,10 +124,11 @@ class Service(Learning, Conversation, Study):
         CREATE UNIQUE INDEX IF NOT EXISTS unique_completion ON events(kind,ref) WHERE kind IN ('lesson','quiz');
         CREATE TABLE IF NOT EXISTS stage_passes(stage INTEGER PRIMARY KEY,assessment_id TEXT NOT NULL,passed_at TEXT NOT NULL,policy_version INTEGER NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS unique_stage_completion ON events(kind,ref) WHERE kind IN ('stage_assessment','remedial');
+        -- Retain removed conversation records for non-destructive learning-data export.
         CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY,session TEXT NOT NULL,role TEXT NOT NULL,data TEXT NOT NULL,created TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS chat_runs(id TEXT PRIMARY KEY,scene TEXT NOT NULL,status TEXT NOT NULL,report TEXT,created TEXT NOT NULL);
         ''')
         self.init_learning()
-        self.init_conversation()
         self.init_study(backup_needed=version>=3)
         from performance import initialize
         initialize(self.db)
@@ -307,9 +308,9 @@ class Service(Learning, Conversation, Study):
             'study_generation_cancel','study_delete',
             'study_save','study_history','study_mistakes','study_retry','study_summary','study_image')
         if action in study_actions: return getattr(self, action)(p)
-        handlers={'config_get':lambda p:editable_config(),'config_save':save_config,'annotate':self.annotate,'dictionary':self.dictionary,'dictionary_add':self.dictionary_add,'encounter':self.encounter,'knowledge':self.knowledge,'chat_state':self.chat_state,'chat_start':self.chat_start,'chat_finish':self.chat_finish,'chat_cancel':self.chat_cancel,'chat_memory':lambda p:self.chat_memory(text(p.get('session','cafe'),'场景',100)),'daily_word':self.daily_word,'daily_word_add':self.daily_word_add,'bootstrap':self.bootstrap,'profile':self.profile,'lesson':self.lesson,'grade':self.grade,'cards':self.cards,'card_create':self.card_create,'card_random':self.card_random,'card_seed':self.card_seed,'review':self.review,'chat':self.chat,'chat_history':self.chat_history,'decode':self.decode,'quiz':self.quiz,'immersion':self.immersion,'export':self.export,'ping':self.ping,'history':self.list_history,'curriculum':self.curriculum,'stage_assessment':self.stage_assessment,'remedial':self.remedial}
+        handlers={'config_get':lambda p:editable_config(),'config_save':save_config,'annotate':self.annotate,'dictionary':self.dictionary,'dictionary_add':self.dictionary_add,'encounter':self.encounter,'knowledge':self.knowledge,'daily_word':self.daily_word,'daily_word_add':self.daily_word_add,'bootstrap':self.bootstrap,'profile':self.profile,'lesson':self.lesson,'grade':self.grade,'cards':self.cards,'card_create':self.card_create,'card_random':self.card_random,'card_seed':self.card_seed,'review':self.review,'decode':self.decode,'quiz':self.quiz,'immersion':self.immersion,'export':self.export,'ping':self.ping,'history':self.list_history,'curriculum':self.curriculum,'stage_assessment':self.stage_assessment,'remedial':self.remedial}
         handlers.update(card_queue=self.card_queue,cards_page=self.cards_page,card_detail=self.card_detail,
-                        reading_lookup=self.reading_lookup,encounters=self.encounters,chat_snapshot=self.chat_snapshot)
+                        reading_lookup=self.reading_lookup,encounters=self.encounters)
         if action not in handlers: raise AppError('不支持的操作。')
         return handlers[action](p)
     def bootstrap(self,p):
@@ -568,9 +569,6 @@ class Service(Learning, Conversation, Study):
             self.event('review',r['id'],{'quality':q,'word':r['word']})
         return dict(due=due.isoformat(timespec='seconds'),interval=interval,
                     card=self.card_detail({'id':r['id']}),counts=self.card_counts(),stats=self.stats())
-    def chat_history(self,p,limit=40):
-        session=text(p.get('session','cafe'),'场景',100)
-        return [dict(role=r['role'],message_id=r['id'],**json.loads(r['data'])) for r in self.db.execute('SELECT id,role,data FROM (SELECT id,role,data FROM messages WHERE session=? ORDER BY id DESC LIMIT ?) ORDER BY id',(session,max(1,min(40,int(limit)))))]
     def decode(self,p):
         sentence=text(p.get('text'),'日语句子',1200)
         schema=dict(translation='完整中文翻译',reading='完整假名读音',romaji='完整罗马音',structure='一句话说明句子结构',parts=[dict(text='成分',reading='假名',role='语法作用',explanation='中文解释')],pitfall='中文母语者易错点',examples=[EXAMPLE])

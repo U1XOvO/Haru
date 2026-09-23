@@ -12,11 +12,13 @@ import portalocker
 
 from app_paths import storage_root
 from llm import AppError
+from llm_config import read_profiles
 
 SCHEMA_VERSION = 3
-MANAGED = ('.env', 'runtime/haru.sqlite3', 'runtime/study-assets',
+MANAGED = ('.llm-providers.json', 'runtime/haru.sqlite3', 'runtime/study-assets',
            'runtime/exports', 'runtime/backups', 'runtime/speaking-latest.wav',
            'runtime/speaking-latest.m4a')
+RECOVERABLE = frozenset(MANAGED) | {'.env'}  # Recover journals left by older versions.
 
 
 def atomic_json(path, value):
@@ -58,9 +60,12 @@ def backup(root, data_dir=None):
     destination.mkdir(parents=True)
     if (data / 'haru.sqlite3').is_file():
         snapshot(data / 'haru.sqlite3', destination / 'haru.sqlite3')
-    if (root / '.env').is_file():
-        shutil.copyfile(root / '.env', destination / '.env')
-        (destination / '.env').chmod(0o600)
+    config = root / '.llm-providers.json'
+    if config.exists() or config.is_symlink():
+        if not config.is_file() or config.is_symlink():
+            raise AppError('AI 配置文件无效，更新前备份未完成。')
+        shutil.copyfile(config, destination / config.name)
+        (destination / config.name).chmod(0o600)
     atomic_json(destination / 'backup.json', {'schema': SCHEMA_VERSION, 'complete': True})
     return destination
 
@@ -78,7 +83,7 @@ def recover(root):
     staging = root / 'migration-backups' / identity
     for item in reversed(record['items']):
         name = item['name']
-        if name not in MANAGED:
+        if name not in RECOVERABLE:
             raise AppError('迁移记录包含无效路径。')
         destination, old, new = root / name, staging / 'old' / name, staging / 'new' / name
         restore = old.exists()
@@ -94,7 +99,8 @@ def recover(root):
 
 
 def _empty_target(root):
-    if (root / '.env').is_file() and (root / '.env').read_bytes().strip():
+    config = root / '.llm-providers.json'
+    if config.exists() or config.is_symlink():
         raise AppError('当前安装已有 AI 配置。为避免覆盖，请在首次使用的空白安装中导入。')
     for name in MANAGED[2:]:
         path = root / name
@@ -132,11 +138,15 @@ def import_legacy(source, root):
     items = []
     for name in MANAGED:
         src = source / name
-        if not src.exists():
+        if not src.exists() and not src.is_symlink():
             continue
         # Resolve only after checking components: do not copy data outside the selected tree.
         if any(p.is_symlink() for p in (src, *src.parents)) or any(p.is_symlink() for p in src.rglob('*')):
             raise AppError('旧版数据包含符号链接，请先整理为普通文件后导入。')
+        if name == '.llm-providers.json' and not src.is_file():
+            raise AppError('旧版 AI 配置不是普通文件，未导入。')
+        if name == '.llm-providers.json':
+            read_profiles(source)
         dest = stage / 'new' / name
         dest.parent.mkdir(parents=True, exist_ok=True)
         if name == 'runtime/haru.sqlite3':
@@ -145,7 +155,7 @@ def import_legacy(source, root):
             shutil.copytree(src, dest)
         else:
             shutil.copyfile(src, dest)
-            if name == '.env':
+            if name == '.llm-providers.json':
                 dest.chmod(0o600)
         items.append({'name': name, 'existed': (root / name).exists()})
     # Do not let stale WAL files from the empty target modify the imported snapshot.

@@ -35,7 +35,6 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
     var player: AVAudioPlayer?
     var recordingTimer: Timer?
     let processLock = NSLock()
-    var chatProcesses: [String: Process] = [:]
     var backendProcesses: [Int32: Process] = [:]
     var shuttingDown = false
     let queue = DispatchQueue(label: "haru.backend", attributes: .concurrent)
@@ -320,7 +319,7 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
         } catch {fail(id,"录音启动失败，请检查麦克风与本地文件权限。")}
     }
     func runBackend(_ id:Int,_ action:String,_ params:[String:Any], speechToken:UUID? = nil, completion:(([String:Any])->Void)? = nil) {
-        let actions:Set<String>=["import_legacy","prepare_update","recover_storage","config_get","config_save","grammar_catalog","grammar_detail","grammar_mark","grammar_practice","study_catalog","study_import","study_generate","study_generation_start","study_generation_step","study_generation_status","study_generation_cancel","study_delete","study_start","study_attempt","study_save","study_history","study_mistakes","study_retry","study_summary","study_image","annotate","dictionary","dictionary_add","encounter","encounters","reading_lookup","knowledge","chat_state","chat_snapshot","chat_start","chat_finish","chat_memory","chat_stream","chat_cancel","daily_word","daily_word_add","bootstrap","profile","lesson","grade","cards","card_queue","cards_page","card_detail","card_create","card_random","card_seed","review","chat","chat_history","decode","quiz","immersion","export","ping","history","curriculum","stage_assessment","remedial"]
+        let actions:Set<String>=["import_legacy","prepare_update","recover_storage","config_get","config_save","grammar_catalog","grammar_detail","grammar_mark","grammar_practice","study_catalog","study_import","study_generate","study_generation_start","study_generation_step","study_generation_status","study_generation_cancel","study_delete","study_start","study_attempt","study_save","study_history","study_mistakes","study_retry","study_summary","study_image","annotate","dictionary","dictionary_add","encounter","encounters","reading_lookup","knowledge","daily_word","daily_word_add","bootstrap","profile","lesson","grade","cards","card_queue","cards_page","card_detail","card_create","card_random","card_seed","review","decode","quiz","immersion","export","ping","history","curriculum","stage_assessment","remedial"]
         let finish: ([String:Any]) -> Void = { result in
             DispatchQueue.main.async {
                 if let completion { completion(result) } else { self.reply(id,result) }
@@ -344,9 +343,6 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
                     return
                 }
                 defer { self.unregisterBackendProcess(process) }
-                let requestID=params["request_id"] as? String ?? ""
-                if action == "chat_stream" {self.processLock.lock();self.chatProcesses[requestID]=process;self.processLock.unlock()}
-                defer {if action == "chat_stream" {self.processLock.lock();self.chatProcesses.removeValue(forKey:requestID);self.processLock.unlock()}}
                 stdin.fileHandleForWriting.write(input);try? stdin.fileHandleForWriting.close()
                 let timedOut = DispatchSemaphore(value: 0)
                 let watchdog=DispatchWorkItem {
@@ -358,38 +354,14 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
                 let deadline = speechToken == nil ? self.backendDeadlineSeconds : 55
                 DispatchQueue.global().asyncAfter(deadline:.now()+deadline,execute:watchdog)
                 var result: [String:Any]?
-                if action == "chat_stream" {
-                    var buffer=Data()
-                    while true {
-                        let chunk=stdout.fileHandleForReading.availableData
-                        if chunk.isEmpty {break}
-                        buffer.append(chunk)
-                        if buffer.count > 2_000_000 {self.stopBackendProcess(process);break}
-                        while let newline=buffer.firstIndex(of:10) {
-                            let line=Data(buffer[..<newline]);buffer.removeSubrange(...newline)
-                            if let event=(try? JSONSerialization.jsonObject(with:line)) as? [String:Any] {
-                                if event["type"] as? String == "delta",let json=String(data:line,encoding:.utf8) {
-                                    DispatchQueue.main.async {self.web.evaluateJavaScript("window.haruStream(\(id),\(json))",completionHandler:nil)}
-                                } else {result=event}
-                            }
-                        }
-                    }
-                } else {
-                    let data=stdout.fileHandleForReading.readDataToEndOfFile()
-                    result=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any]
-                }
+                let data=stdout.fileHandleForReading.readDataToEndOfFile()
+                result=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any]
                 process.waitUntilExit();watchdog.cancel()
                 let didTimeOut = timedOut.wait(timeout: .now()) == .success
-                if action == "chat_cancel", let data=result?["data"] as? [String:Any],data["status"] as? String == "cancelled" {
-                    self.processLock.lock()
-                    let active=self.chatProcesses[requestID]
-                    self.processLock.unlock()
-                    if let active { self.stopBackendProcess(active) }
-                }
                 let speechData = result?["data"] as? [String:Any]
                 if didTimeOut {
                     result=["ok":false,"error":speechToken == nil ? "操作超过10分钟上限，后台任务已停止。请确认任务状态后重试。" : "语音生成超时，请检查网络后重试。"]
-                } else if action == "chat_stream",result == nil {result=["ok":false,"error":"生成已停止或连接中断，本轮未保存。"]}
+                }
                 if let token = speechToken, let data = speechData, let file = self.speechFile(data) {
                     // Load away from the UI thread and release transient files even when
                     // shutdown prevents the queued main-thread completion from running.
