@@ -10,16 +10,10 @@ vm.runInContext(fs.readFileSync('ui/app.js','utf8').split("$('#settings-nav').in
 vm.runInContext(fs.readFileSync('ui/learning.js','utf8'),context);
 const execute=code=>vm.runInContext(code,context);
 async function main(){
- execute("state={stats:{},profile:{},annotations:[]};page='chat';scene='cafe';run=async(label,work)=>work();calls=[];");
- context.snapshot={state:{session:'cafe',status:'free',goals:[]},memory:{},exposure_refs:['message:1','message:2'],messages:[1,2].map(id=>({role:'assistant',message_id:id,jp:'水',kana:'みず',zh:'水',feedback:'',suggestion:''}))};
- execute("rpc=async(action)=>{calls.push(action);if(action!=='chat_snapshot')throw new Error(action);return snapshot;};");
- await execute('loadChat()');
- assert.equal(execute('calls.join(",")'),'chat_snapshot','displaying replies must not fan out encounter requests');
- assert.equal(execute('viewedSources.size'),2);
- execute("rpc=()=>new Promise(resolve=>{finishOldChat=resolve;});");
- const stale=execute('loadChat()');execute("navigationRun++;page='home';finishOldChat({...snapshot,state:{session:'obsolete'}});");await stale;
- assert.equal(execute('chatState.session'),'cafe');
-
+ assert.equal(execute("navItems.some(item=>item[0]==='chat')"),false);
+ assert.equal(execute("typeof chatView"),'undefined');
+ execute("lesson={design_version:1,kind:'lesson',lesson_no:1,stage:1,title:'入门',goal:'问候',grammar:'语法',tip:'提示',examples:[],review_targets:[{word:'猫',covered:true}],source:'fixture'};");
+ assert.match(execute('lessonBody()'),/本次复习词：猫/,'daily lesson body must render the shared review coverage helper');
  readingNodes=[{dataset:{readingText:'水'},innerHTML:''},{dataset:{readingText:'猫'},innerHTML:''}];
  execute("page='lessons';lesson={id:'l'};calls=[];rpc=async(action,p)=>{calls.push(action);if(action!=='reading_lookup')throw new Error(action);const s=p.sentences[0];return {checked:[s],items:[{sentence:s,tokens:[{surface:s,lemma:'',reading:'',meaning:''}]}]};};");
  await execute('loadVisibleReadings()');await new Promise(setImmediate);
@@ -34,6 +28,6 @@ async function main(){
  await execute('loadDailyWord()');await execute('loadDailyWord(true)');
  assert.equal(execute('JSON.stringify(calls)'),'[false,true]');
  assert.match(execute('dailyWordView()'),/换一个/);
- console.log('Chat batching, stale responses, deferred annotations, lesson tabs and daily cache controls passed');
+ console.log('Deferred annotations, lesson tabs and daily cache controls passed');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

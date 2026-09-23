@@ -89,10 +89,7 @@ class Host:
         self.active_requests = 0
         self.maintenance = False
         self.update_ready = False
-        self.backend = Backend(self.data_dir, self._stream)
-
-    def _stream(self, request_id, event):
-        self.window.run_js(f'window.haruStream({request_id},{json.dumps(event, ensure_ascii=True)})')
+        self.backend = Backend(self.data_dir)
 
     def _recording_stopped(self, error):
         self.window.run_js('window.haruRecordingStopped()')

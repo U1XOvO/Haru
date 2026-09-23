@@ -3,7 +3,7 @@ let distributionInfo=null, distributionLocked=false;
 function distributionSettingsHTML(){
  const d=distributionInfo;
  if(!haruHasNative())return '';
- return `<div class="card" id="distribution-settings"><h3>版本与更新</h3>${d?`<p>Haru ${esc(d.version)} · ${d.distribution==='source'?'源码版':d.distribution==='release'?'正式版':'测试版'}</p><p class="hint">${d.updates_enabled?'更新前会备份学习数据库和 AI 配置。':'此构建使用手动更新，可从发布页面下载安装包。'}</p><div class="inline-actions"><button type="button" class="btn" data-release-action="check" ${d.updates_enabled?'':'disabled'}>检查更新</button><button type="button" class="btn" data-release-action="downloads">下载页面</button></div>${d.updates_enabled?`<label class="check-label"><input type="checkbox" id="automatic-updates" ${d.automatic_updates?'checked':''}>自动检查更新</label>`:''}${d.distribution!=='source'?'<hr><h3>从旧版导入</h3><p class="hint">先退出旧版 Haru，再选择原仓库目录。只向空白安装导入配置、学习记录和媒体文件；原目录保持不变。导入后请重新打开本应用。</p><button type="button" class="btn" data-release-action="import">选择旧版目录</button>':''}`:'<p class="hint">正在读取版本…</p>'}</div>`;
+ return `<div class="card" id="distribution-settings"><h3>版本与更新</h3>${d?`<p>Haru ${esc(d.version)} · ${d.distribution==='source'?'源码版':d.distribution==='release'?'正式版':'测试版'}</p><p class="hint">${d.updates_enabled?'更新前会备份学习数据库和多服务商 AI 配置。':'此构建使用手动更新，可从发布页面下载安装包。'}</p><div class="inline-actions"><button type="button" class="btn" data-release-action="check" ${d.updates_enabled?'':'disabled'}>检查更新</button><button type="button" class="btn" data-release-action="downloads">下载页面</button></div>${d.updates_enabled?`<label class="check-label"><input type="checkbox" id="automatic-updates" ${d.automatic_updates?'checked':''}>自动检查更新</label>`:''}${d.distribution!=='source'?'<hr><h3>从旧版导入</h3><p class="hint">先退出旧版 Haru，再选择原仓库目录。只向空白安装导入已保存的多服务商配置、学习记录和媒体文件；旧 .env 不会导入，原目录保持不变。导入后请重新打开本应用。</p><button type="button" class="btn" data-release-action="import">选择旧版目录</button>':''}`:'<p class="hint">正在读取版本…</p>'}</div>`;
 }
 async function loadDistributionInfo(){
  if(!haruHasNative())return;
@@ -11,7 +11,7 @@ async function loadDistributionInfo(){
  catch(e){const card=document.querySelector('#distribution-settings');if(card)card.innerHTML=`<h3>版本与更新</h3><p class="hint">${esc(e.message)}</p>`;}
 }
 function maintenanceBusy(){
- return record||busyCount>0||chatBusy||studyGeneration||studyGenerationCancelling||studySaveFailed||studyClockFlight||
+ return record||busyCount>0||studyGeneration||studyGenerationCancelling||studySaveFailed||studyClockFlight||
   dailyWordLoading||generatingLessons.size>0||pending.size>0||
   (!!studyAttempt&&studyAttempt.status!=='submitted'&&studyAttempt.status!=='completed'&&!studyAttempt.result);
 }

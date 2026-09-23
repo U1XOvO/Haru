@@ -17,9 +17,6 @@ def main():
         bundle=root/args.bundle.name
         shutil.copytree(args.bundle,bundle,symlinks=True)
         env=dict(os.environ,HARU_STORAGE_DIR=str(root/'storage'),HARU_DATA_DIR=str(root/'storage/runtime'))
-        # Even if the developer has credentials in the shell, the smoke run is offline.
-        for key in list(env):
-            if key.startswith(('LLM_','OPENAI_','DEEPSEEK_')): env.pop(key)
         windows=sys.platform=='win32'
         worker=bundle/'HaruBackend.exe' if windows else bundle/'Contents/Resources/backend/HaruBackend'
         def rpc(action,params=None,expected_error=None):

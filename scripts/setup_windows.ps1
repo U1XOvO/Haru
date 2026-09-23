@@ -9,9 +9,6 @@ try {
     & $Python -I -c 'import sys, ssl, sqlite3, webview, portalocker; assert sys.version_info[:2] == (3, 12)'
     if ($LASTEXITCODE -ne 0) { throw 'Python environment check failed.' }
     Write-Host 'Project Python environment ready.'
-    # Exclusive creation preserves existing credentials, including simultaneous launches.
-    & $Python -I (Join-Path $PSScriptRoot 'init_env.py')
-    if ($LASTEXITCODE -ne 0) { throw 'Could not prepare project configuration.' }
     & $Python -B (Join-Path $PSScriptRoot 'build_windows.py')
     if ($LASTEXITCODE -ne 0) { throw 'Haru app build failed. Close Haru, then retry start.cmd.' }
     $App = Join-Path $ProjectDir 'dist\Haru\Haru.exe'

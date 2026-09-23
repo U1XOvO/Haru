@@ -155,14 +155,9 @@ class Learning:
 
     def _encounter_words(self, ref):
         if not isinstance(ref, str): raise AppError('学习来源无效。')
-        if ref.startswith('message:'):
-            row = self.db.execute("SELECT data FROM messages WHERE id=? AND role='assistant'", (ref[8:],)).fetchone()
-            if not row: raise AppError('对话来源不存在。')
-            d = json.loads(row[0]); passages = [d.get('jp', '')]
-        else:
-            d = self.content(ref)
-            if d['kind'] not in ('lesson', 'immersion', 'remedial'): raise AppError('此内容不记录词汇接触。')
-            passages = [x['jp'] for x in d.get('examples', d.get('sentences', []))]
+        d = self.content(ref)
+        if d['kind'] not in ('lesson', 'immersion', 'remedial'): raise AppError('此内容不记录词汇接触。')
+        passages = [x['jp'] for x in d.get('examples', d.get('sentences', []))]
         tokens = []
         if passages:
             placeholders=','.join('?' for _ in passages)

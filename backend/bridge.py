@@ -22,11 +22,7 @@ def main():
         else:
             from service import Service
             app=Service()
-            if req['action']=='chat_stream':
-                def emit(event): print(json.dumps(event,ensure_ascii=False),flush=True)
-                data=app.chat_stream(req.get('params',{}),emit)
-            else:
-                data=app.route(req['action'],req.get('params',{}))
+            data=app.route(req['action'],req.get('params',{}))
         out={'ok':True,'data':data}
     except AppError as e: out={'ok':False,'error':str(e)}
     except Exception: out={'ok':False,'error':'本地处理未完成，请检查输入或重试。已有记录已保留。'}

@@ -84,21 +84,6 @@ class PerformanceTests(unittest.TestCase):
             result = self.app.stats(done={},progress={'next_lesson':1})
         self.assertEqual(result['attempts'],0)
 
-    def test_chat_snapshot_batches_exposure_and_keeps_it_idempotent(self):
-        d=dict(jp='水をください。',kana='みずをください。',zh='请给我水。',pending_task='どうぞ')
-        with self.app.db:
-            for _ in range(25):
-                self.app.db.execute("INSERT INTO messages(session,role,data,created) VALUES('cafe','user',?,'2026-09-22')",(json.dumps({'text':'こんにちは'}),))
-                self.app.db.execute("INSERT INTO messages(session,role,data,created) VALUES('cafe','assistant',?,'2026-09-22')",(json.dumps(d),))
-        snapshot = self.app.route('chat_snapshot',{'scene':'cafe'})
-        self.assertEqual(len(snapshot['messages']),40)
-        self.assertEqual(len(snapshot['exposure_refs']),20)
-        self.assertEqual(snapshot['memory']['pending_task'],'どうぞ')
-        count = self.app.db.execute('SELECT COUNT(*) FROM encounters').fetchone()[0]
-        self.app.route('chat_snapshot',{'scene':'cafe'})
-        self.assertEqual(self.app.db.execute('SELECT COUNT(*) FROM encounters').fetchone()[0],count)
-        self.assertEqual(count,20)
-
     def test_reading_lookup_only_returns_requested_saved_sentences(self):
         with self.app.db:
             for sentence in ['水','猫']:
@@ -114,15 +99,17 @@ class PerformanceTests(unittest.TestCase):
         self.assertEqual(first['checked'],['水'])
         self.assertEqual(self.app.reading_lookup({'sentences':['猫']})['checked'],['猫'])
 
-    def test_finish_clears_expired_request_after_reopen(self):
-        session=self.app.chat_start({'scene':'cafe'})['session']
+    def test_removed_conversation_routes_preserve_legacy_export_data(self):
         with self.app.db:
-            self.app.db.execute('INSERT INTO messages(session,role,data,created) VALUES(?,?,?,?)',(session,'user',json.dumps({'text':'こんにちは'}),'2026-09-22'))
-            self.app.db.execute("INSERT INTO chat_requests VALUES('stale',?,'active',0)",(session,))
-        self.app.close();self.app=Service(self.folder.name)
-        report=dict(summary='再练一次',goals=[dict(met=False,message_id=0,quote='',note='继续练习') for _ in range(3)])
-        with patch.object(self.app,'ai',return_value=report): self.app.chat_finish({'session':session})
-        self.assertEqual(self.app.db.execute("SELECT status FROM chat_requests WHERE id='stale'").fetchone()[0],'failed')
+            self.app.db.execute("INSERT INTO chat_runs VALUES('legacy','cafe','finished',NULL,'2026-09-22')")
+            self.app.db.execute("INSERT INTO messages(session,role,data,created) VALUES('legacy','user',?,'2026-09-22')",
+                                (json.dumps({'text':'こんにちは'}),))
+        with self.assertRaises(AppError):
+            self.app.route('chat_snapshot', {'scene':'cafe'})
+        path = self.app.export({'type':'json'})['path']
+        exported = json.loads(Path(path).read_text())
+        self.assertEqual(exported['chat_runs'][0]['id'], 'legacy')
+        self.assertEqual(exported['messages'][0]['session'], 'legacy')
 
     def test_daily_word_reuses_date_and_stage_but_explicit_refresh_changes_it(self):
         fixture=dict(CARDS[0],source='AI生成',model='fixture')
@@ -187,15 +174,15 @@ class PerformanceTests(unittest.TestCase):
 
     def test_real_subprocess_bridge_accepts_new_bounded_actions(self):
         sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'native'))
-        from desktop_bridge import Backend
-        env={k:v for k,v in os.environ.items() if not k.startswith(('LLM_','OPENAI_','DEEPSEEK_'))}
-        env.update(HARU_STORAGE_DIR=self.folder.name)
-        with patch.dict(os.environ,env,clear=True):
-            backend=Backend(Path(self.folder.name),lambda *_:None)
+        from desktop_bridge import Backend, DesktopError
+        with patch.dict(os.environ, {'HARU_STORAGE_DIR': self.folder.name}):
+            backend=Backend(Path(self.folder.name))
             try:
+                with self.assertRaises(DesktopError):
+                    backend.request(dict(id=-1,action='chat_snapshot',params={'scene':'cafe'}))
                 for index,(action,params) in enumerate([
                     ('card_seed',{'compact':True}),('card_queue',{}),('cards_page',{}),
-                    ('chat_snapshot',{'scene':'cafe'}),('reading_lookup',{'sentences':['水']}),('bootstrap',{})]):
+                    ('reading_lookup',{'sentences':['水']}),('bootstrap',{})]):
                     result=backend.request(dict(id=index,action=action,params=params))
                     self.assertTrue(result.get('ok'),(action,result.get('error')))
                     self.assertLess(len(json.dumps(result,ensure_ascii=False).encode()),2_000_000)

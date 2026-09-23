@@ -10,20 +10,19 @@
 !/data/study/
 
 # Exact runtime allowlist (including safe configuration and clone instructions).
-!/.env.example
 !/.gitattributes
 !/.gitignore
 !/.python-version
 !/README.md
 !/backend/app_paths.py
 !/backend/bridge.py
-!/backend/conversation.py
 !/backend/curriculum.py
 !/backend/jlpt_blueprints.py
 !/backend/jlpt_quality.py
 !/backend/learning.py
 !/backend/lesson_design.py
 !/backend/llm.py
+!/backend/llm_config.py
 !/backend/progression.py
 !/backend/performance.py
 !/backend/service.py
@@ -46,7 +45,6 @@
 !/scripts/build_icons.sh
 !/scripts/build_windows.py
 !/scripts/haru_windows.spec
-!/scripts/init_env.py
 !/scripts/make_icon.swift
 !/scripts/setup_env.sh
 !/scripts/setup_windows.ps1
@@ -96,4 +94,6 @@
 !/tests/test_speech_bridge.py
 !/tests/test_speech_ui.js
 !/tests/test_macos_speech.py
+!/tests/test_llm_config.py
+!/tests/test_llm_config_ui.js
 !/ui/release.js
