@@ -17,7 +17,8 @@ class ProviderTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        env = patch.dict(os.environ, {}, clear=True)
+        # Keep Windows system variables needed by OpenSSL while isolating legacy AI keys.
+        env = patch.dict(os.environ, {'LLM_API_KEY': '', 'LLM_MODEL_ID': ''})
         env.start(); self.addCleanup(env.stop)
         root = patch.object(llm_config, 'config_root', return_value=self.root)
         root.start(); self.addCleanup(root.stop)
@@ -40,7 +41,8 @@ class ProviderTests(unittest.TestCase):
         saved = self.save([self.row('first', key='fixture-first', model='first-model'), self.row()], 'second')
         self.assertEqual(llm_config.configuration()['key'], 'fixture-new')
         self.assertNotIn('fixture-new', json.dumps(saved))
-        self.assertEqual((self.root / '.llm-providers.json').stat().st_mode & 0o777, 0o600)
+        if os.name != 'nt':
+            self.assertEqual((self.root / '.llm-providers.json').stat().st_mode & 0o777, 0o600)
         saved = self.save(saved['providers'], 'first', saved['revision'])
         with patch.dict(os.environ, {'LLM_API_KEY':'different', 'LLM_MODEL_ID':'environment'}):
             self.assertEqual(llm_config.configuration()['model'], 'first-model')

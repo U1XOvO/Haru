@@ -53,7 +53,8 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual((target / 'runtime/study-assets/example.wav').read_bytes(), b'local audio')
         self.assertEqual((target / '.llm-providers.json').read_bytes(),
                          (source / '.llm-providers.json').read_bytes())
-        self.assertEqual((target / '.llm-providers.json').stat().st_mode & 0o777, 0o600)
+        if os.name != 'nt':
+            self.assertEqual((target / '.llm-providers.json').stat().st_mode & 0o777, 0o600)
         self.assertFalse((target / '.env').exists())
         with self.assertRaises(AppError): maintenance.import_legacy(source, target)
 
@@ -163,7 +164,8 @@ class DistributionTests(unittest.TestCase):
             self.assertEqual(copy.execute("SELECT value FROM kv WHERE key='backup-test'").fetchone()[0], 'true')
         self.assertEqual((folder / '.llm-providers.json').read_bytes(),
                          (root / '.llm-providers.json').read_bytes())
-        self.assertEqual((folder / '.llm-providers.json').stat().st_mode & 0o777, 0o600)
+        if os.name != 'nt':
+            self.assertEqual((folder / '.llm-providers.json').stat().st_mode & 0o777, 0o600)
         self.assertFalse((folder / '.env').exists())
 
     def test_frozen_macos_uses_application_support(self):
