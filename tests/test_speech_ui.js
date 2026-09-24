@@ -28,6 +28,8 @@ async function main(){
   assert.equal(h.calls.length,1);assert.equal(h.calls[0].action,'speak');
   assert.deepEqual(h.calls[0].params,{text:'雨が降っています。',rate:0.42});
   assert.equal(h.toasts.length,0,'cached native playback should succeed without a browser voice');
+  await h.run("state={profile:{speech_rate:1.5}};speakText('速い朗読')");
+  assert.deepEqual(h.calls[1].params,{text:'速い朗読',rate:0.63});
   h.response.current={ok:false,error:'此内容尚未缓存，请联网后重试。'};
   await h.run("speakText('新しい文')");
   assert.deepEqual(h.toasts,[{message:'此内容尚未缓存，请联网后重试。',error:true}]);

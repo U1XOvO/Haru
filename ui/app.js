@@ -271,7 +271,7 @@ function settingsView(){const p=state.profile;return title('学习偏好','找�
   <input type="range" name="speech_rate" min="0.5" max="2.0" step="0.05"
          value="${(p.speech_rate??1.0).toFixed(2)}" data-speech-rate
          style="width:100%;accent-color:#536b9b">
-  <span class="hint">向左更慢，向右更快。1.0× 为默认；2.0× 大约相当于 1.6 倍速。</span>
+  <span class="hint">向左更慢，向右更快。1.0× 为默认语速。</span>
 </label>
 <button class="btn primary">保存偏好 ${icon('check')}</button></form></div><div class="card" id="ai-settings">${aiConfigView()}</div>${distributionSettingsHTML()}</div><aside class="stack" style="align-content:start"><div class="card"><h3>你的学习记录</h3><p class="hint">课程、卡片、测验及历史对话记录保存在本机 SQLite 数据库。导出包含个人学习内容，请妥善保存。</p>${btn(icon('download')+' 导出学习档案','export-json','soft','style="margin-top:15px"')}</div><div class="tip-note"><strong>关于隐私与声音</strong>点击 AI 功能后，相关输入、近期学习摘要与错题会发送到你配置的 API 服务。<br>macOS / Windows 朗读均使用 Edge TTS；未缓存的朗读文字会发送到在线语音服务，已缓存音频可离线播放。跟读录音仅保留在本机。</div></aside></div>`;}
 async function openLesson(day,generate=false,tab='grammar',regenerate=false){
@@ -321,21 +321,9 @@ document.addEventListener('input',e=>{  if(e.target.matches('[data-speech-rate]'
   }if(e.target.id==='card-search'){cardSearch=e.target.value;cardHistoryRun++;clearTimeout(cardSearchTimer);const navRun=navigationRun;cardSearchTimer=setTimeout(()=>{if(page==='cards'&&navRun===navigationRun)void loadCardHistory().catch(e=>toast(e.message,true));},200);return;}const keys={'decode-input':'grammar','card-word':'word','immersion-topic':'topic'};if(keys[e.target.id])drafts[keys[e.target.id]]=e.target.value;});
 document.addEventListener('submit',async e=>{e.preventDefault();const f=e.target;if(f.id==='ai-config-form'){await saveAIConfig(f,e.submitter?.value==='test');return;}const b=f.querySelector('button[type="submit"],button:not([type])');if(f.id==='profile-form'){const d=new FormData(f);await run('正在保存偏好…',async()=>{await rpc('profile',{name:d.get('name'),minutes:Number(d.get('minutes')),goal:d.get('goal'),romaji:d.has('romaji'),speech_rate:Number(d.get('speech_rate'))});await refresh();toast('已保存你的学习节奏。');},b);}if(f.id==='card-form'){await generateCard($('#card-word').value,b);}if(f.id==='decode-form'){const value=$('#decode-input').value;await run('正在一点点拆解句子…',async()=>{decoded=await rpc('decode',{text:value});if(page==='grammar')render();},b);}if(f.id==='immersion-form'){const topic=$('#immersion-topic').value;await run('正在写一个属于你的日语故事…',async()=>{story=await rpc('immersion',{topic});if(page==='immersion')render();},b);}if(f.id==='quiz-form'){const count=f.querySelectorAll('.quiz-question').length;const form=new FormData(f);const answers=Array.from({length:count},(_,i)=>form.has('q'+i)?Number(form.get('q'+i)):null);if(answers.includes(null)){toast('请先完成所有题目。',true);return;}await run('正在核对答案…',async()=>{const r=await rpc('grade',{id:f.dataset.id,answers});await refresh();if(f.isConnected){r.results.forEach((x,i)=>{const t=$('#feedback-'+i);if(t)t.innerHTML=`<div class="result-line ${x.correct?'':'wrong'}">${x.correct?'✓ 回答正确':'再看一眼 · 正确选项 '+String.fromCharCode(65+x.answer)} · ${esc(x.explanation)}</div>`;});$('#quiz-result').innerHTML=`<div class="score-banner"><strong>${r.score}<small> 分</small></strong><div><h3>${r.kind==='stage_assessment'?(r.passed?'阶段通过，下一阶段已解锁':'先补强，再重新评估'):r.kind==='remedial'?(r.passed?'补强完成，可以重新评估':'继续补强不熟悉的题目'):r.score>=80?'今天又前进了一步':'把不熟悉的地方，再看一遍'}</h3><p>${r.recorded?'已保存本次结果；错题会用于后续教学。':r.kind==='stage_assessment'||r.kind==='remedial'?'此份结果已记录，显示已保存成绩。':'本次为重做反馈，首次提交记录保持不变。'}</p>${r.skills?`<p>${Object.entries(r.skills).map(([k,v])=>({grammar:'语法与词汇',kana:'假名',listening:'听力'}[k])+': '+v.correct+'/'+v.total).join(' · ')}</p>`:''}${btn('继续学习 '+icon('arrow'),'start-lesson','soft')}</div></div>`;f.querySelectorAll('input,button').forEach(el=>el.disabled=true);}document.querySelectorAll('.stage-panel').forEach(el=>el.outerHTML=stagePanel());$('#nav').innerHTML=nav();},b);}});
 async function speakText(text){
-  const speed = state?.profile?.speech_rate ?? 1.0;
-  try{
-    if(haruHasNative()){
-      await rpc('speak',{text,rate:0.42*speed});
-    }else if('speechSynthesis' in window){
-      const voices=speechSynthesis.getVoices();
-      const v=voices.find(x=>x.lang.startsWith('ja'));
-      if(!v){toast('未找到日语语音，请使用 Haru 桌面 App 或安装系统日语语音。',true);return;}
-      speechSynthesis.cancel();
-      const u=new SpeechSynthesisUtterance(text);
-      u.lang='ja-JP';u.voice=v;
-      u.rate=0.8*speed;
-      speechSynthesis.speak(u);
-    }else toast('当前环境不支持朗读，请使用 Haru 桌面 App。',true);
-  }catch(e){toast(e.message,true);}
+ if(!haruHasNative()){toast('日语朗读请在 Haru 桌面 App 中使用。',true);return;}
+ const speed=state?.profile?.speech_rate??1.0;
+ try{await rpc('speak',{text,rate:0.42*speed});}catch(e){toast(e.message,true);}
 }
 window.haruRecordingStopped=()=>{record=false;if($('#record-btn')){$('#record-btn').innerHTML=icon('mic')+' 录下我的跟读';$('#record-btn').classList.remove('recording');}toast('录音已保存（最长60秒）。');};
 $('#settings-nav').innerHTML=icon('settings')+'偏好设置';
