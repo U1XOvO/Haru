@@ -275,3 +275,12 @@ footer{gap:16px;flex-wrap:wrap}
 .ai-save-status:not(:empty){margin-top:14px;padding:10px 12px;border-radius:8px;background:#f2f5fa;font-size:13px;overflow-wrap:anywhere}
 @container(max-width:430px){.ai-provider-header{align-items:flex-start;flex-direction:column}.ai-provider-actions{width:100%;justify-content:space-between}.ai-provider-identity{width:100%}.ai-fields{grid-template-columns:minmax(0,1fr)}.ai-advanced>summary small{display:none}}
 @media(max-width:600px){#ai-settings{padding:17px}.ai-settings-heading{margin-bottom:22px}.ai-provider-header,.ai-provider-body{padding:14px}.ai-advanced>summary{padding:12px 14px}.ai-advanced-body{padding:4px 14px 14px}.ai-save-actions{align-items:stretch}.ai-save-actions>div{margin-left:auto}}
+input[type="range"]{
+  padding: 0;
+  border: 0;
+  background: transparent;
+  width: 100%;
+  height: 20px;
+  accent-color: #536b9b;
+  cursor: pointer;
+}
