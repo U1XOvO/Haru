@@ -93,6 +93,7 @@
 !/tests/test_speech.py
 !/tests/test_speech_bridge.py
 !/tests/test_speech_ui.js
+!/tests/test_speech_profile.py
 !/tests/test_macos_speech.py
 !/tests/test_llm_config.py
 !/tests/test_llm_config_ui.js

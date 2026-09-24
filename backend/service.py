@@ -135,7 +135,9 @@ class Service(Learning, Study):
         if version < 3:
             self.db.execute('PRAGMA user_version=3')
         with self.db:
-            if self.get('profile') is None: self.set('profile',{'name':'学习者','minutes':20,'time':'20:30','goal':'日常交流','start':date.today().isoformat(),'romaji':True})
+            if self.get('profile') is None:
+                self.set('profile', {'name':'学习者','minutes':20,'time':'20:30','goal':'日常交流',
+                         'start':date.today().isoformat(),'romaji':True,'speech_rate':1.0})
 
     def close(self):
         try: self.db.close()
@@ -329,6 +331,11 @@ class Service(Learning, Study):
         current['time']=text(p.get('time',current['time']),'学习时间',5)
         if not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d',current['time']): raise AppError('时间格式应为HH:MM。')
         current['romaji']=bool(p.get('romaji',True))
+        # 语速倍数，0.5–2.0；1.0 为默认。非数字或越界一律报错，不静默兜底。
+        rate = p.get('speech_rate', current.get('speech_rate', 1.0))
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not 0.5 <= rate <= 2.0:
+            raise AppError('语速倍数应在 0.5 到 2.0 之间。')
+        current['speech_rate'] = round(float(rate), 2)
         with self.db: self.set('profile',current)
         return current
     def lesson(self,p):
