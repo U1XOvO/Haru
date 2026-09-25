@@ -93,7 +93,7 @@ class SpeechGoogleTests(unittest.TestCase):
             url, key, payload, _, _, _ = calls[0]
             self.assertEqual(url, speech_google.API + '/interactions')
             self.assertEqual(key, 'fixture-secret')
-            self.assertEqual(payload['model'], speech_config.MODEL)
+            self.assertEqual(payload['model'], 'gemini-3.8-flash-lite-tts')
             content = payload['input'][0]['content'][0]
             self.assertEqual(content['text'], '今日はいい天気です。')
             self.assertEqual(content['annotations'][0]['type'], 'speech_metadata')
@@ -128,10 +128,12 @@ class SpeechGoogleTests(unittest.TestCase):
 
     def test_expired_voice_is_recreated_once(self):
         calls = []
+        voice_models = []
 
         async def fake_post(url, key, payload, timeout, retries=0, **options):
             calls.append(url)
             if url.endswith('/voices'):
+                voice_models.append(payload['voice']['model'])
                 return httpx.Response(200, json={'id': 'voice_recreated123'})
             if calls.count(speech_google.API + '/interactions') == 1:
                 speech_google._message(httpx.Response(404), voice=True)
@@ -142,6 +144,7 @@ class SpeechGoogleTests(unittest.TestCase):
         self.assertEqual(result.engine, 'gemini')
         self.assertEqual(edge.calls, [])
         self.assertEqual(calls.count(speech_google.API + '/voices'), 1)
+        self.assertEqual(voice_models, ['gemini-3.8-flash-lite-tts'])
         self.assertEqual(speech_config.read_settings(self.root)['voices'][0]['voice_id'],
                          'voice_recreated123')
 

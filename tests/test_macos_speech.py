@@ -123,6 +123,11 @@ func acceptsPlayback(_ id:Int) {
                "only missing audio output may prevent silent playback: \(error)")
     }
 }
+func togglePause(_ id:Int) -> String {
+    subject.maintenanceCompletions[id] = { result in results[id] = result }
+    subject.toggleAudioPause(id)
+    return (results[id]?["data"] as? [String:String])?["state"] ?? ""
+}
 
 // Stop acknowledges the pending request synchronously, then discards a late result.
 start(1,"cancel",1,0.35)
@@ -146,7 +151,14 @@ expect(subject.speechReplyID == 3 && results[3] == nil,"old callback preserves c
 expect(subject.player == nil,"old callback cannot play during new synthesis")
 acceptsPlayback(3)
 expect(!FileManager.default.fileExists(atPath:audio(3).path),"loaded transient is deleted")
+if subject.player?.isPlaying == true {
+    expect(togglePause(30) == "paused" && subject.audioPaused,"pause retains the active player")
+    expect(subject.audioState() == "paused","paused player reports its state")
+    expect(togglePause(31) == "playing" && !subject.audioPaused,"resume continues the player")
+}
 subject.stopAudio()
+expect(subject.audioState() == "idle","stopped player reports idle")
+expect(togglePause(32) == "idle","stopped audio cannot resume")
 workersFinished()
 
 // A late old success also must not overwrite a newer player already created.

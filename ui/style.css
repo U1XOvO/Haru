@@ -229,11 +229,16 @@ footer{gap:16px;flex-wrap:wrap}
 .ai-provider-list{display:grid;gap:16px;margin-top:18px}
 .ai-provider{container-type:inline-size;min-width:0;border:1px solid #e2e7ef;border-radius:13px;background:#fff;overflow:hidden;transition:border-color .18s}
 .ai-provider:has(.ai-default input:checked){border-color:#b9c8df}
-.ai-provider-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px;background:#f8f9fc;border-bottom:1px solid var(--line)}
+.ai-provider-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px;background:#f8f9fc}
+.ai-provider:has(.ai-provider-content:not([hidden])) .ai-provider-header{border-bottom:1px solid var(--line)}
 .ai-provider:has(.ai-default input:checked) .ai-provider-header{background:#f2f5fb}
+.ai-provider-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:1;min-width:0;padding:0;background:transparent;text-align:left}
+.ai-provider-toggle:hover{color:#4f6588}
+.ai-provider-toggle .ai-chevron{flex-shrink:0}
+.ai-provider-toggle[aria-expanded="true"] .ai-chevron{transform:rotate(180deg)}
 .ai-provider-identity{display:flex;align-items:center;gap:10px;min-width:0}
-.ai-provider-identity>div{min-width:0}
-.ai-provider-identity h4{font-size:15px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.5}
+.ai-provider-name{min-width:0}
+.ai-provider-name strong{display:block;font-size:15px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.5}
 .ai-provider-number{font-size:12px;font-weight:600;letter-spacing:.5px;color:#7386a5;background:#fff;border:1px solid #e5eaf2;border-radius:9px;width:32px;height:32px;flex:0 0 32px;display:grid;place-items:center}
 .ai-provider-caption{display:block;font-size:12px;color:#708099;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .ai-provider-actions{display:flex;align-items:center;gap:12px;flex-shrink:0}
@@ -273,7 +278,7 @@ footer{gap:16px;flex-wrap:wrap}
 .ai-refresh .icon{width:14px;height:14px}
 .ai-save-status:empty{display:none}
 .ai-save-status:not(:empty){margin-top:14px;padding:10px 12px;border-radius:8px;background:#f2f5fa;font-size:13px;overflow-wrap:anywhere}
-@container(max-width:430px){.ai-provider-header{align-items:flex-start;flex-direction:column}.ai-provider-actions{width:100%;justify-content:space-between}.ai-provider-identity{width:100%}.ai-fields{grid-template-columns:minmax(0,1fr)}.ai-advanced>summary small{display:none}}
+@container(max-width:430px){.ai-provider-header{align-items:flex-start;flex-direction:column}.ai-provider-toggle,.ai-provider-actions{width:100%}.ai-provider-actions{justify-content:space-between}.ai-provider-identity{width:100%}.ai-fields{grid-template-columns:minmax(0,1fr)}.ai-advanced>summary small{display:none}}
 @media(max-width:600px){#ai-settings{padding:17px}.ai-settings-heading{margin-bottom:22px}.ai-provider-header,.ai-provider-body{padding:14px}.ai-advanced>summary{padding:12px 14px}.ai-advanced-body{padding:4px 14px 14px}.ai-save-actions{align-items:stretch}.ai-save-actions>div{margin-left:auto}}
 input[type="range"]{
   padding: 0;
@@ -303,6 +308,8 @@ input[type="range"]{
 .speech-edge-rate input[type="range"]{width:100%}
 .speech-edge-rate .hint{margin:0}
 .speech-options,.speech-voice-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.speech-options label{align-content:start}
+.speech-options input,.speech-options select{height:44px}
 .speech-list-heading,.speech-voice-heading,.speech-voice-actions,.speech-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .speech-list-heading{justify-content:space-between;margin-top:7px}
 .speech-list-heading strong{font-size:16px}
@@ -319,6 +326,8 @@ input[type="range"]{
 .speech-voice summary{cursor:pointer}
 .speech-sample{white-space:pre-wrap;line-height:1.8;overflow-wrap:anywhere}
 .speech-voice-fields{margin:15px 0}
+.speech-voice-fields label{align-content:start}
+.speech-voice-fields input,.speech-voice-fields select{height:44px}
 .speech-wide{grid-column:1/-1}
 .speech-voice-actions{margin-top:12px}
 .speech-actions{justify-content:flex-end;border-top:1px solid var(--line);padding-top:18px}

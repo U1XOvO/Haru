@@ -33,6 +33,7 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
     var speechReplyID: Int?
     var recorder: AVAudioRecorder?
     var player: AVAudioPlayer?
+    var audioPaused = false
     var recordingTimer: Timer?
     let processLock = NSLock()
     var backendProcesses: [Int32: Process] = [:]
@@ -167,8 +168,28 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
         speechProcess = nil
         processLock.unlock()
         player?.stop(); player = nil
+        audioPaused = false
         if let id = speechReplyID { speechReplyID = nil; ok(id) }
         if let process { queue.async { self.stopBackendProcess(process) } }
+    }
+    func toggleAudioPause(_ id:Int) {
+        guard let player else { audioPaused = false; ok(id,["state":"idle"]); return }
+        if audioPaused {
+            guard player.play() else {fail(id,"无法继续播放，请检查输出设备。");return}
+            audioPaused = false
+            ok(id,["state":"playing"])
+        } else if player.isPlaying {
+            player.pause()
+            audioPaused = true
+            ok(id,["state":"paused"])
+        } else {
+            audioPaused = false
+            ok(id,["state":"idle"])
+        }
+    }
+    func audioState() -> String {
+        if audioPaused { return "paused" }
+        return player?.isPlaying == true ? "playing" : "idle"
     }
     func speechFile(_ data: [String:Any]) -> URL? {
         let engine = data["engine"] as? String ?? "edge"
@@ -285,6 +306,10 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
             }else{NSWorkspace.shared.open(file);ok(id)}
         case "study_stop_audio":
             stopAudio();ok(id)
+        case "audio_toggle_pause":
+            toggleAudioPause(id)
+        case "audio_status":
+            ok(id,["state":audioState()])
         case "speak":
             startSpeech(id,p)
         case "open_url":

@@ -29,6 +29,8 @@ def build_payload(c, task, context, schema):
     max_tokens = 5000
     if isinstance(context, dict) and context.get('lesson_design'):
         max_tokens = 10000
+    elif isinstance(context, dict) and context.get('immersion_story'):
+        max_tokens = 10000
     if is_jlpt:
         from jlpt_quality import SYSTEM as JLPT_SYSTEM
         system = JLPT_SYSTEM

@@ -1,9 +1,14 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const listeners={},status={textContent:''},input={value:'temporary-key'};
-const target={isConnected:true,innerHTML:'',querySelector(selector){
+const listeners={},status={textContent:''},input={value:'temporary-key'},clearKey={checked:false};
+let rendered='';
+const target={isConnected:true,
+ set innerHTML(html){rendered=html;input.value='';clearKey.checked=false;},
+ get innerHTML(){return rendered;},
+ querySelector(selector){
  if(selector==='#speech-preview-status')return status;
  if(selector==='[name="google_key"]')return input;
+ if(selector==='[name="clear_key"]')return clearKey;
 }};
 const config={
  revision:0,engine:'gemini',key_configured:true,selected:'girl',
@@ -22,7 +27,12 @@ const config={
 const calls=[];
 const context=vm.createContext({
  console,Date,Math,document:{
-  querySelector(selector){return selector==='#speech-settings'?target:null;},
+  querySelector(selector){
+   if(selector==='#speech-settings')return target;
+   if(selector==='#speech-settings [name="google_key"]')return input;
+   if(selector==='#speech-settings [name="clear_key"]')return clearKey;
+   return null;
+  },
   addEventListener(type,callback){(listeners[type]??=[]).push(callback);}
  },icon:()=>'<svg></svg>',
  esc:value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
@@ -32,7 +42,7 @@ const context=vm.createContext({
  toast:()=>{},
  rpc:async(action,params)=>{
   calls.push({action,params:params&&JSON.parse(JSON.stringify(params))});
-  if(action==='speech_settings_save')return {...config,revision:config.revision+1,key_configured:true};
+  if(action==='speech_settings_save')return {...config,revision:config.revision+1,key_configured:!params.clear_key};
   if(action==='profile')return {...context.state.profile,...params};
   if(action==='speak')return {engine:'edge',fallback:'Google 配额已达上限'};
   throw Error('Unexpected RPC '+action);
@@ -46,6 +56,7 @@ assert.match(html,/可爱年轻女声/);
 assert.match(html,/大学女生/);
 assert.match(html,/清爽年轻男声/);
 assert.match(html,/自定义新声音/);
+assert.match(html,/Gemini 3\.8 Flash-Lite TTS/);
 assert.match(html,/春日野餐/);
 assert.match(html,/Edge TTS 语速/);
 assert.match(html,/name="speech_rate"[^>]*value="1\.00"/);
@@ -55,7 +66,7 @@ assert.doesNotMatch(fs.readFileSync('ui/app.js','utf8'),/name="speech_rate"/);
 const radio={value:'girl',checked:true};
 const engine={value:'gemini',checked:true};
 const fields={
- engine,google_key:input,clear_key:{checked:false},selected:radio,
+ engine,google_key:input,clear_key:clearKey,selected:radio,
  pace:{value:'normal'},mood:{value:'gentle'},clarity:{value:'learning'},
  style:{value:'like a patient teacher'},timeout:{value:'45'},retries:{value:'1'},
  speech_rate:{value:'1.50'}
@@ -95,6 +106,14 @@ async function main(){
  assert.equal(calls.at(-1).params.rate,0.63);
  assert.match(status.textContent,/Gemini 试音失败.*Edge TTS/);
  assert.doesNotMatch(status.textContent,/temporary-key/);
+ clearKey.checked=true;
+ const add={disabled:false,dataset:{speechAction:'add'},closest:()=>form};
+ await listeners.click[0]({target:{closest:()=>add}});
+ assert.equal(clearKey.checked,true,'adding a voice keeps the pending key removal');
+ await vm.runInContext('saveSpeechSettings(form)',context);
+ assert.equal(calls.at(-1).action,'speech_settings_save');
+ assert.equal(calls.at(-1).params.clear_key,true);
+ assert.equal(vm.runInContext('speechSettings.key_configured',context),false);
  console.log('Speech settings: escaped custom styles, local key handling, and honest fallback preview passed');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

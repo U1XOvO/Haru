@@ -46,6 +46,12 @@ class WindowsAudio:
             self._remove_transient(self._transient_audio)
             self._transient_audio = None
 
+    def _audio_mode(self):
+        mode = ctypes.create_unicode_buffer(32)
+        if self.mci('status haru_play mode', mode, len(mode), None):
+            return 'idle'
+        return mode.value.strip().lower()
+
     @staticmethod
     def _remove_transient(path):
         try:
@@ -135,6 +141,18 @@ class WindowsAudio:
             if action == 'study_stop_audio':
                 self._cancel_speech()
                 self._stop_audio()
+            elif action == 'audio_toggle_pause':
+                mode = self._audio_mode()
+                if mode == 'playing':
+                    self._command('pause haru_play')
+                    return {'state': 'paused'}
+                if mode == 'paused':
+                    self._command('resume haru_play')
+                    return {'state': 'playing'}
+                return {'state': 'idle'}
+            elif action == 'audio_status':
+                mode = self._audio_mode()
+                return {'state': mode if mode in ('playing', 'paused') else 'idle'}
             elif action == 'record_start':
                 if self.recording:
                     raise DesktopError('已经在录音。')

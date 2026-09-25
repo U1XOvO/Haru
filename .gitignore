@@ -102,5 +102,6 @@
 !/tests/test_macos_speech.py
 !/tests/test_llm_config.py
 !/tests/test_llm_config_ui.js
+!/tests/test_immersion.py
 !/ui/release.js
 !/ui/speech_settings.js

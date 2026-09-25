@@ -29,16 +29,29 @@ class FakeMCI:
         self.commands = []
         self.played = []
         self.opened = None
+        self.mode = 'idle'
 
-    def __call__(self, command, *_):
+    def __call__(self, command, buffer=None, *_):
         self.commands.append(command)
+        if command == 'status haru_play mode':
+            if self.mode == 'idle':
+                return 1
+            buffer.value = self.mode
+            return 0
         opened = re.fullmatch(r'open "(.+)" type (?:mpegvideo|waveaudio) alias haru_play', command)
         if opened:
             self.opened = Path(opened[1])
             if not self.opened.is_file():
                 return 1
         if command == 'play haru_play':
+            self.mode = 'playing'
             self.played.append((self.opened, self.opened.read_bytes()))
+        if command == 'pause haru_play':
+            self.mode = 'paused'
+        if command == 'resume haru_play':
+            self.mode = 'playing'
+        if command == 'close haru_play':
+            self.mode = 'idle'
         saved = re.fullmatch(r'save haru_record "(.+)"', command)
         if saved:
             Path(saved[1]).write_bytes(b'local microphone recording')
@@ -77,6 +90,18 @@ class WindowsAudioTests(unittest.TestCase):
 
     def speak(self, text='こんにちは', **params):
         return self.audio.perform('speak', dict(text=text, **params))
+
+    def test_pause_resumes_from_current_audio_and_stop_clears_it(self):
+        self.assertEqual(self.audio.perform('audio_toggle_pause', {}), {'state':'idle'})
+        self.speak('長い物語です。')
+        self.assertEqual(self.audio.perform('audio_status', {}), {'state':'playing'})
+        self.assertEqual(self.audio.perform('audio_toggle_pause', {}), {'state':'paused'})
+        self.assertEqual(self.audio.perform('audio_status', {}), {'state':'paused'})
+        self.assertEqual(self.audio.perform('audio_toggle_pause', {}), {'state':'playing'})
+        self.mci.mode = 'stopped'
+        self.assertEqual(self.audio.perform('audio_status', {}), {'state':'idle'})
+        self.audio.perform('study_stop_audio', {})
+        self.assertEqual(self.audio.perform('audio_toggle_pause', {}), {'state':'idle'})
 
     def start_speech(self, text):
         errors = []

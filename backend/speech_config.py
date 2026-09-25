@@ -12,7 +12,7 @@ from llm import AppError
 
 
 FILENAME = '.speech-settings.json'
-MODEL = 'gemini-3.8-flash-tts'
+MODEL = 'gemini-3.8-flash-lite-tts'
 PRESETS = (
     {
         'id': 'girl', 'name': '可爱年轻女声', 'gender': 'female',
