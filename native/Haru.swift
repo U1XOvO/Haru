@@ -380,7 +380,8 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
                         self.stopBackendProcess(process)
                     }
                 }
-                let deadline = speechToken == nil ? self.backendDeadlineSeconds : 285
+                // First playback may design a voice before synthesizing speech.
+                let deadline = speechToken == nil ? self.backendDeadlineSeconds : 540
                 DispatchQueue.global().asyncAfter(deadline:.now()+deadline,execute:watchdog)
                 var result: [String:Any]?
                 let data=stdout.fileHandleForReading.readDataToEndOfFile()

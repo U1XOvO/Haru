@@ -20,6 +20,7 @@ from speech_config import MODEL, read_settings, style_for, _atomic_save
 API = 'https://generativelanguage.googleapis.com/v1beta'
 VOICE_ID = re.compile(r'voice_[A-Za-z0-9_-]{1,180}\Z')
 MAX_WAV = 20 * 1024 * 1024
+VOICE_CREATION_TIMEOUT = 300
 
 
 class VoiceUnavailable(SpeechError):
@@ -97,7 +98,7 @@ async def create_voice(identity, root=None, *, force=False):
                 'model': MODEL, 'type': 'prompted', 'display_name': voice['name'],
                 'gender': voice['gender'], 'language_code': 'ja-JP',
                 'prompted': {'input': voice['description']}}}
-            response = await _post(API + '/voices', data['key'], payload, data['timeout'])
+            response = await _post(API + '/voices', data['key'], payload, VOICE_CREATION_TIMEOUT)
             created = _json(response).get('id', '')
             if not isinstance(created, str) or not VOICE_ID.fullmatch(created):
                 raise SpeechError('Google 未返回有效的音色编号。')

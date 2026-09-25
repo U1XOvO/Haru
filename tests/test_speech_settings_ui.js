@@ -56,7 +56,7 @@ assert.match(html,/可爱年轻女声/);
 assert.match(html,/大学女生/);
 assert.match(html,/清爽年轻男声/);
 assert.match(html,/自定义新声音/);
-assert.match(html,/Gemini 3\.8 Flash-Lite TTS/);
+assert.match(html,/Gemini 3\.8 Flash TTS/);
 assert.match(html,/春日野餐/);
 assert.match(html,/Edge TTS 语速/);
 assert.match(html,/name="speech_rate"[^>]*value="1\.00"/);
