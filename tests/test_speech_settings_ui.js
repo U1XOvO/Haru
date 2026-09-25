@@ -27,12 +27,13 @@ const context=vm.createContext({
  },icon:()=>'<svg></svg>',
  esc:value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
  haruHasNative:()=>true,
- state:{profile:{speech_rate:1}},
+ state:{profile:{name:'学习者',minutes:20,goal:'日常交流',romaji:true,speech_rate:1}},
  run:async(_label,fn)=>fn(),
  toast:()=>{},
  rpc:async(action,params)=>{
   calls.push({action,params:params&&JSON.parse(JSON.stringify(params))});
   if(action==='speech_settings_save')return {...config,revision:config.revision+1,key_configured:true};
+  if(action==='profile')return {...context.state.profile,...params};
   if(action==='speak')return {engine:'edge',fallback:'Google 配额已达上限'};
   throw Error('Unexpected RPC '+action);
  }
@@ -46,14 +47,18 @@ assert.match(html,/大学女生/);
 assert.match(html,/清爽年轻男声/);
 assert.match(html,/自定义新声音/);
 assert.match(html,/春日野餐/);
+assert.match(html,/Edge TTS 语速/);
+assert.match(html,/name="speech_rate"[^>]*value="1\.00"/);
 assert.match(html,/&lt;script&gt;oops&lt;\/script&gt;/);
 assert.doesNotMatch(html,/<script>oops<\/script>|temporary-key/);
+assert.doesNotMatch(fs.readFileSync('ui/app.js','utf8'),/name="speech_rate"/);
 const radio={value:'girl',checked:true};
 const engine={value:'gemini',checked:true};
 const fields={
  engine,google_key:input,clear_key:{checked:false},selected:radio,
  pace:{value:'normal'},mood:{value:'gentle'},clarity:{value:'learning'},
- style:{value:'like a patient teacher'},timeout:{value:'45'},retries:{value:'1'}
+ style:{value:'like a patient teacher'},timeout:{value:'45'},retries:{value:'1'},
+ speech_rate:{value:'1.50'}
 };
 const sections=config.voices.map(voice=>({dataset:{voiceId:voice.id},
  querySelector(selector){
@@ -77,6 +82,9 @@ async function main(){
  await vm.runInContext('saveSpeechSettings(form)',Object.assign(context,{form}));
  assert.equal(calls[0].action,'speech_settings_save');
  assert.equal(calls[0].params.key,'temporary-key');
+ assert.equal(calls[1].action,'profile');
+ assert.equal(calls[1].params.speech_rate,1.5);
+ assert.equal(context.state.profile.speech_rate,1.5);
  assert.equal(input.value,'');
  assert.equal(vm.runInContext('speechSettings.key',context),undefined);
  assert.equal(status.textContent,'朗读设置已保存。');
@@ -84,6 +92,7 @@ async function main(){
  const event={target:{closest:()=>button}};
  await listeners.click[0](event);
  assert.equal(calls.at(-1).action,'speak');
+ assert.equal(calls.at(-1).params.rate,0.63);
  assert.match(status.textContent,/Gemini 试音失败.*Edge TTS/);
  assert.doesNotMatch(status.textContent,/temporary-key/);
  console.log('Speech settings: escaped custom styles, local key handling, and honest fallback preview passed');

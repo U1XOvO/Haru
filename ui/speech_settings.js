@@ -1,6 +1,7 @@
 'use strict';
 let speechSettings=null;
 let speechDraftKey='';
+let speechRateDraft=null;
 
 function speechOption(value,label,current){
  return '<option value="'+value+'" '+(value===current?'selected':'')+'>'+label+'</option>';
@@ -28,9 +29,11 @@ function speechVoiceView(voice,selected){
 function speechSettingsView(){
  if(!speechSettings)return '<h3>朗读与声音</h3><p class="hint" role="status">正在读取朗读配置…</p>';
  const s=speechSettings;
+ const edgeRate=(speechRateDraft??state?.profile?.speech_rate??1).toFixed(2);
  return '<div class="speech-heading"><span class="ai-settings-mark" aria-hidden="true">'+icon('sound')+'</span><div><h3>朗读与声音</h3><p>选择声音，听见喜欢的日语。</p></div></div>'
   +'<form id="speech-settings-form" autocomplete="off"><fieldset class="speech-settings-fields">'
   +'<div class="speech-engine-choice"><label><input type="radio" name="engine" value="edge" '+(s.engine==='edge'?'checked':'')+'> Edge TTS</label><label><input type="radio" name="engine" value="gemini" '+(s.engine==='gemini'?'checked':'')+'> Gemini 3.8 Flash TTS</label></div>'
+  +'<div class="speech-edge-rate"><label for="speech-rate-control">Edge TTS 语速 <b id="speech-rate-display">'+edgeRate+'×</b></label><input id="speech-rate-control" type="range" name="speech_rate" min="0.5" max="2.0" step="0.05" value="'+edgeRate+'" data-speech-rate><p class="hint">向左更慢，向右更快。1.0× 为默认语速；Gemini 回退到 Edge 时也使用此语速。</p></div>'
   +'<p class="hint">Gemini 朗读需使用你自己的 Google AI Studio API Key。调用失败时会尝试 Edge TTS；两者都需要网络，缓存过的音频可离线播放。</p>'
   +'<label>Google AI Studio API Key<input type="password" name="google_key" value="" autocomplete="new-password" placeholder="'+(s.key_configured?'已配置，留空保持原 Key':'粘贴你的 API Key')+'" maxlength="4096"></label>'
   +'<label class="check-label"><input type="checkbox" name="clear_key">清除已保存的 Google Key</label>'
@@ -40,7 +43,7 @@ function speechSettingsView(){
   +'<label>Google 超时（秒）<input type="number" name="timeout" min="10" max="90" step="1" value="'+s.timeout+'"></label>'
   +'<label>临时错误重试次数<select name="retries">'+speechOption('0','0 次',String(s.retries))+speechOption('1','1 次',String(s.retries))+'</select></label></div>'
   +'<label>自定义朗读方式<textarea name="style" maxlength="200" rows="2" placeholder="例如：像耐心的同学一样，句间稍作停顿">'+esc(s.style)+'</textarea></label>'
-  +'<p class="hint">Gemini 的节奏由模型控制，不能保证精确的播放倍率。上方学习偏好中的倍速用于 Edge TTS。试音会保存当前设置并选择 Gemini。</p>'
+  +'<p class="hint">Gemini 的节奏由模型控制，不能保证精确的播放倍率。试音会保存当前设置并选择 Gemini。</p>'
   +'<div class="speech-list-heading"><strong>声音预设</strong><button type="button" class="btn small soft" data-speech-action="add" '+(s.voices.length>=20?'disabled':'')+'>＋ 自定义新声音</button></div>'
   +'<div class="speech-voice-list">'+s.voices.map(v=>speechVoiceView(v,s.selected)).join('')+'</div>'
   +'<div class="speech-actions"><button type="button" class="btn small" data-speech-action="refresh">'+icon('refresh')+' 重新读取</button><button type="button" class="btn small" data-speech-action="stop">'+icon('stop')+' 停止播放</button><button type="submit" class="btn primary">保存朗读设置</button></div>'
@@ -74,22 +77,41 @@ async function loadSpeechSettings(){
  const target=document.querySelector('#speech-settings');
  if(!target)return;
  await run('正在读取朗读配置…',async()=>{
-  try{speechSettings=await rpc('speech_settings_get');if(target.isConnected)paintSpeechSettings();}
+  try{speechSettings=await rpc('speech_settings_get');speechRateDraft=null;if(target.isConnected)paintSpeechSettings();}
   catch(error){if(target.isConnected)target.innerHTML='<h3>朗读与声音</h3><p class="hint" role="alert">'+esc(error.message)+'</p><button class="btn small" data-speech-action="refresh">重新读取</button>';throw error;}
  });
 }
 
 async function saveSpeechSettings(form){
  const params=collectSpeechSettings(form);
+ const rate=Number(form.querySelector('[name="speech_rate"]').value);
  const saved=await rpc('speech_settings_save',params);
  speechSettings=saved;
  speechDraftKey='';
  const input=form.querySelector('[name="google_key"]');
  if(input)input.value='';
  params.key='';
+ try{
+  if(rate!==state.profile.speech_rate){
+   const p=state.profile;
+   state.profile=await rpc('profile',{name:p.name,minutes:p.minutes,goal:p.goal,
+                                     romaji:p.romaji,speech_rate:rate});
+  }
+ }catch(error){
+  speechRateDraft=rate;
+  paintSpeechSettings('朗读设置已保存，但 Edge 语速未保存：'+error.message);
+  throw error;
+ }
+ speechRateDraft=null;
  paintSpeechSettings('朗读设置已保存。');
  return saved;
 }
+
+document.addEventListener('input',event=>{
+ if(!event.target.matches('[data-speech-rate]'))return;
+ speechRateDraft=Number(event.target.value);
+ document.querySelector('#speech-rate-display').textContent=speechRateDraft.toFixed(2)+'×';
+});
 
 document.addEventListener('submit',async event=>{
  if(event.target.id!=='speech-settings-form')return;
