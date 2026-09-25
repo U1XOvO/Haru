@@ -149,7 +149,7 @@ class Host:
                 if not result.get('ok'):
                     self.maintenance = False
                 return result
-            elif action in {'speak' , 'record_start', 'record_stop', 'record_play', 'study_stop_audio'}:
+            elif action in {'speak', 'audio_toggle_pause', 'audio_status', 'record_start', 'record_stop', 'record_play', 'study_stop_audio'}:
                 data = self.audio.perform(action, params)
             elif action == 'study_pick':
                 import webview

@@ -11,5 +11,11 @@ for size in 16 32 128 256 512; do
   doubled=$((size * 2))
   sips -z "$doubled" "$doubled" "$PROJECT_DIR/assets/icon.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
 done
-iconutil -c icns "$ICONSET" -o "$PROJECT_DIR/assets/Haru.icns"
-cp "$ICONSET/icon_128x128.png" "$PROJECT_DIR/ui/brand-icon.png"
+if iconutil -c icns "$ICONSET" -o "$PROJECT_DIR/assets/Haru.icns"; then
+  cp "$ICONSET/icon_128x128.png" "$PROJECT_DIR/ui/brand-icon.png"
+elif [ -s "$PROJECT_DIR/assets/Haru.icns" ] && [ -s "$PROJECT_DIR/ui/brand-icon.png" ]; then
+  echo 'iconutil 未接受新图标集，保留现有的 Haru 图标继续本机构建。' >&2
+else
+  echo '无法生成或复用 Haru 图标。' >&2
+  exit 1
+fi

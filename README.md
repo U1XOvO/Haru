@@ -22,6 +22,7 @@
 1. 打开「偏好设置 → AI 连接」，填写 API 地址、密钥和模型 ID，选择默认配置，点击「保存并测试」。服务需兼容 Chat Completions 并支持 JSON 输出。
    可添加多个服务商或模型，在「模型参数」中设置思考等级、温度和输出上限等。
 2. 进入「每日课程」，选择第一课，点击「AI 创建课程」。
+3. 朗读默认使用 Edge TTS。如需 Gemini 3.8 Flash-Lite TTS，在「偏好设置 → 朗读与声音」填写自己的 Google AI Studio API Key，选择 Gemini 并保存。两者朗读未缓存的内容都需联网；Gemini 会消耗 Google API 额度，失败时会尝试 Edge TTS。
 
 ## 可以学什么
 

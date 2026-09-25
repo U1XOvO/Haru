@@ -602,10 +602,25 @@ class Service(Learning, Study):
         return visible_test(self.save('quiz',d))
     def immersion(self,p):
         topic=text(p.get('topic','咖啡店'),'主题',100)
-        schema=dict(title='微故事标题',sentences=[EXAMPLE],words=[dict(word='生词',meaning='中文',reading='假名')],task='一个现实生活中可以完成的小任务')
-        context=dict(self.context(),topic=topic)
-        d=self.ai('自然复现 review_targets 的词语，不适合主题的可以跳过。写一个4-6句、符合当前阶段的沉浸式日语微故事。日常自然、简单短句。附3个生词和一个可实践任务。',context,schema)
+        schema=dict(title='故事标题',sentences=[EXAMPLE],words=[dict(word='生词',meaning='中文',reading='假名')],task='一个现实生活中可以完成的小任务')
+        context=dict(self.context(),topic=topic,immersion_story=True)
+        task=(
+            '以 topic 为故事核心，参考 level、stage、stage_name、goal 和真实学习记录，'
+            '写一个10-12句的原创沉浸式日语故事。难度比当前阶段的常见练习略高，'
+            '但仍能结合上下文和读音、中文提示理解；不要把阶段编号当作考试等级。'
+            '给人物一个具体目的或困扰，让一次小意外、误会、选择或发现推动情节，'
+            '写出可感知的场景细节、人物反应和自然对话，结尾回应开头或留下余味。'
+            '避免流水账、重复句式、空泛赞美和生硬反转，不要只罗列基础问候。'
+            '长短句交替，适度使用符合当前阶段的连接、原因、比较或想法表达；'
+            '可加入1-2个从情境能推断的稍难表达，不要突然跳到远超当前阶段的语法。'
+            '自然复现适合主题的 review_targets 词语，不适合的可以跳过。'
+            'sentences 每项是一句完整日语，并提供准确的完整假名读音、Hepburn 罗马音和中文意思。'
+            'words 收录故事中实际出现的5-6个有学习价值的生词，附假名和中文；'
+            'task 给出一个与故事呼应、现实生活中可实践的小任务。'
+        )
+        d=self.ai(task,context,schema)
         fields(d,['title','task']); validate_examples(d.get('sentences'))
+        if len(d['sentences'])<8: raise AppError('故事篇幅不足，请重试。')
         if not isinstance(d.get('words'),list) or not 1<=len(d['words'])<=8: raise AppError('生词结构不完整。')
         for w in d['words']: fields(w,['word','meaning','reading'])
         self.apply_review_targets(d,context['review_targets'],[x['jp'] for x in d['sentences']])

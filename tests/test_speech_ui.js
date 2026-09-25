@@ -38,6 +38,28 @@ async function main(){
   await h.run("studyAction({dataset:{study:'stop-audio'}})");
   assert.equal(h.calls.at(-1).action,'study_stop_audio');
   assert.equal(h.browserCalls(),0);
+  h.run("story={title:'雨の日',task:'空を見ます。',words:[],sentences:[{jp:'雨が降っています。',kana:'',romaji:'',zh:''},{jp:'傘を持ちます。',kana:'',romaji:'',zh:''}]};page='immersion';globalThis.japanese=s=>s;globalThis.reviewCoverage=()=>''");
+  assert.match(h.run('immersionView()'),/id="story-audio-controls"/);
+  h.response.current={ok:true,data:{engine:'edge'}};
+  await h.run("handleAction('story-play')");
+  assert.equal(h.calls.at(-1).action,'speak');
+  assert.equal(h.calls.at(-1).params.text,'雨が降っています。傘を持ちます。');
+  assert.match(h.run('storyAudioControls()'),/暂停播放/);
+  h.response.current={ok:true,data:{state:'paused'}};
+  await h.run("handleAction('story-pause')");
+  assert.equal(h.calls.at(-1).action,'audio_toggle_pause');
+  assert.match(h.run('storyAudioControls()'),/继续播放/);
+  h.response.current={ok:true,data:{state:'playing'}};
+  await h.run("handleAction('story-pause')");
+  assert.match(h.run('storyAudioControls()'),/暂停播放/);
+  h.response.current={ok:true,data:{state:'idle'}};
+  await h.run("handleAction('story-pause')");
+  assert.match(h.run('storyAudioControls()'),/data-action="story-pause" disabled/);
+  h.response.current={ok:true,data:{engine:'edge'}};
+  await h.run("speakText('短い文です。')");
+  assert.match(h.run('storyAudioControls()'),/data-action="story-pause"[^]*暂停播放/);
+  h.run("setStoryPlayback('idle')");
+  assert.equal(h.browserCalls(),0);
  }
  const preview=harness('preview');
  await preview.run("speakText('こんにちは。')");

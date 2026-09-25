@@ -6,7 +6,9 @@ from pathlib import Path
 import threading
 
 from desktop_bridge import DesktopError
+from app_paths import storage_root
 from speech import SpeechEngine, SpeechError, normalize
+from speech_google import prepare_speech
 
 
 @dataclass
@@ -20,6 +22,7 @@ class WindowsAudio:
     def __init__(self, data_dir, stopped, *, cache_bytes=32 * 1024 * 1024,
                  cache_entries=128, synthesis_timeout=45):
         self.path = Path(data_dir) / 'speaking-latest.wav'
+        self.data_dir = Path(data_dir)
         self.stopped = stopped
         self.lock = threading.RLock()
         self.recording = False
@@ -42,6 +45,12 @@ class WindowsAudio:
         if self._transient_audio is not None:
             self._remove_transient(self._transient_audio)
             self._transient_audio = None
+
+    def _audio_mode(self):
+        mode = ctypes.create_unicode_buffer(32)
+        if self.mci('status haru_play mode', mode, len(mode), None):
+            return 'idle'
+        return mode.value.strip().lower()
 
     @staticmethod
     def _remove_transient(path):
@@ -71,7 +80,10 @@ class WindowsAudio:
             request.loop = asyncio.get_running_loop()
             request.task = asyncio.current_task()
         try:
-            return await self.engine.prepare(params, cancelled=request.cancelled.is_set)
+            return await prepare_speech(params, self.data_dir,
+                                        cancelled=request.cancelled.is_set,
+                                        config_dir=storage_root(),
+                                        edge_engine=self.engine)
         finally:
             with self.lock:
                 request.loop = request.task = None
@@ -80,6 +92,7 @@ class WindowsAudio:
         request = SpeechRequest()
         audio = None
         played = False
+        outcome = {}
         with self.lock:
             if self.closed:
                 raise DesktopError('应用正在退出。')
@@ -99,6 +112,8 @@ class WindowsAudio:
                         self._stop_audio()
                         raise
                     played = True
+                    outcome = {'engine': getattr(audio, 'engine', 'edge'),
+                               'fallback': getattr(audio, 'fallback', '')}
         except asyncio.CancelledError:
             return
         except SpeechError as error:
@@ -111,6 +126,7 @@ class WindowsAudio:
             with self.lock:
                 if self._speech_request is request:
                     self._speech_request = None
+        return outcome
 
     def perform(self, action, params):
         if action == 'speak':
@@ -118,14 +134,25 @@ class WindowsAudio:
                 normalize(params)
             except SpeechError as error:
                 raise DesktopError(str(error)) from error
-            self._edge_speak(params)
-            return {}
+            return self._edge_speak(params)
         with self.lock:
             if self.closed:
                 raise DesktopError('应用正在退出。')
             if action == 'study_stop_audio':
                 self._cancel_speech()
                 self._stop_audio()
+            elif action == 'audio_toggle_pause':
+                mode = self._audio_mode()
+                if mode == 'playing':
+                    self._command('pause haru_play')
+                    return {'state': 'paused'}
+                if mode == 'paused':
+                    self._command('resume haru_play')
+                    return {'state': 'playing'}
+                return {'state': 'idle'}
+            elif action == 'audio_status':
+                mode = self._audio_mode()
+                return {'state': mode if mode in ('playing', 'paused') else 'idle'}
             elif action == 'record_start':
                 if self.recording:
                     raise DesktopError('已经在录音。')

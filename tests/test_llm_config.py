@@ -108,6 +108,7 @@ class ProviderTests(unittest.TestCase):
 
     def test_task_budgets_use_openai_compatible_max_tokens(self):
         cases=[({},5000),(None,5000),({'lesson_design':True},10000),
+               ({'immersion_story':True},10000),
                ({'_jlpt_role':'author','count':2},8000),
                ({'_jlpt_role':'reviewer','count':2,'type_id':'grammar_order'},8000),
                ({'_jlpt_role':'explanation_editor','count':4},8000),
@@ -121,7 +122,8 @@ class ProviderTests(unittest.TestCase):
 
     def test_explicit_parameters_override_every_task(self):
         c=self.row(reasoning='off',max_tokens=900,temperature=0.2,top_p=0.8)
-        for context in [{},{'lesson_design':True},{'_jlpt_role':'global_reviewer','count':80}]:
+        for context in [{},{'lesson_design':True},{'immersion_story':True},
+                        {'_jlpt_role':'global_reviewer','count':80}]:
             payload=llm.build_payload(c,'task',context,{})
             self.assertEqual(payload['reasoning_effort'],'none')
             self.assertEqual(payload['max_tokens'],900)

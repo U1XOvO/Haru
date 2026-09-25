@@ -29,16 +29,29 @@ class FakeMCI:
         self.commands = []
         self.played = []
         self.opened = None
+        self.mode = 'idle'
 
-    def __call__(self, command, *_):
+    def __call__(self, command, buffer=None, *_):
         self.commands.append(command)
+        if command == 'status haru_play mode':
+            if self.mode == 'idle':
+                return 1
+            buffer.value = self.mode
+            return 0
         opened = re.fullmatch(r'open "(.+)" type (?:mpegvideo|waveaudio) alias haru_play', command)
         if opened:
             self.opened = Path(opened[1])
             if not self.opened.is_file():
                 return 1
         if command == 'play haru_play':
+            self.mode = 'playing'
             self.played.append((self.opened, self.opened.read_bytes()))
+        if command == 'pause haru_play':
+            self.mode = 'paused'
+        if command == 'resume haru_play':
+            self.mode = 'playing'
+        if command == 'close haru_play':
+            self.mode = 'idle'
         saved = re.fullmatch(r'save haru_record "(.+)"', command)
         if saved:
             Path(saved[1]).write_bytes(b'local microphone recording')
@@ -53,6 +66,8 @@ class WindowsAudioTests(unittest.TestCase):
         self.mci = FakeMCI()
         self.calls = []
         self.behavior = self.prepare_audio
+        patcher = patch.object(audio_module, 'storage_root', return_value=self.root)
+        patcher.start(); self.addCleanup(patcher.stop)
         patcher = patch.object(audio_module.ctypes, 'WinDLL', create=True,
                                return_value=types.SimpleNamespace(mciSendStringW=self.mci))
         patcher.start(); self.addCleanup(patcher.stop)
@@ -75,6 +90,18 @@ class WindowsAudioTests(unittest.TestCase):
 
     def speak(self, text='こんにちは', **params):
         return self.audio.perform('speak', dict(text=text, **params))
+
+    def test_pause_resumes_from_current_audio_and_stop_clears_it(self):
+        self.assertEqual(self.audio.perform('audio_toggle_pause', {}), {'state':'idle'})
+        self.speak('長い物語です。')
+        self.assertEqual(self.audio.perform('audio_status', {}), {'state':'playing'})
+        self.assertEqual(self.audio.perform('audio_toggle_pause', {}), {'state':'paused'})
+        self.assertEqual(self.audio.perform('audio_status', {}), {'state':'paused'})
+        self.assertEqual(self.audio.perform('audio_toggle_pause', {}), {'state':'playing'})
+        self.mci.mode = 'stopped'
+        self.assertEqual(self.audio.perform('audio_status', {}), {'state':'idle'})
+        self.audio.perform('study_stop_audio', {})
+        self.assertEqual(self.audio.perform('audio_toggle_pause', {}), {'state':'idle'})
 
     def start_speech(self, text):
         errors = []
@@ -99,6 +126,28 @@ class WindowsAudioTests(unittest.TestCase):
         with self.assertRaises(audio_module.DesktopError):
             self.speak('a' * 6001)
         self.assertEqual(len(self.calls), 1)
+
+    def test_gemini_wav_and_edge_fallback_report_actual_engine(self):
+        wav = self.root / 'gemini.wav'
+        wav.write_bytes(b'fixture wav')
+
+        async def gemini(*_args, **_kwargs):
+            return speech.SpeechAudio(wav, False, engine='gemini')
+
+        with patch.object(audio_module, 'prepare_speech', gemini):
+            self.assertEqual(self.speak('こんにちは'), {'engine': 'gemini', 'fallback': ''})
+        self.assertIn(f'open "{wav}" type waveaudio alias haru_play', self.mci.commands)
+
+        edge = self.root / 'fallback.mp3'
+        edge.write_bytes(b'fixture mp3')
+
+        async def fallback(*_args, **_kwargs):
+            return speech.SpeechAudio(edge, False, engine='edge', fallback='Google 配额不足')
+
+        with patch.object(audio_module, 'prepare_speech', fallback):
+            self.assertEqual(self.speak('またね'),
+                             {'engine': 'edge', 'fallback': 'Google 配额不足'})
+        self.assertIn(f'open "{edge}" type mpegvideo alias haru_play', self.mci.commands)
 
     def test_shared_engine_error_is_reported_without_system_fallback(self):
         async def failed(params, cancelled):
