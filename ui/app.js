@@ -25,7 +25,7 @@ const speak=(s,small=false)=>`<button class="${small?'btn small':'icon-btn'}" da
 const ex=x=>`<div class="example"><div><p class="jp" lang="ja">${japanese(x.jp)}</p><p class="reading">${esc(x.kana)} <span class="romaji">· ${esc(x.romaji)}</span></p><p class="translation">${esc(x.zh)}</p></div>${speak(x.jp)}</div>`;
 const empty=(name,desc,action='')=>`<div class="empty">${icon('leaf')}<h3>${name}</h3><p>${desc}</p>${action}</div>`;
 function nav(){return navItems.map(([id,i,t])=>`<button class="nav-item ${page===id?'active':''}" data-nav="${id}">${icon(i)}${t}${id==='cards'&&state?.stats.due?`<span class="nav-count">${state.stats.due}</span>`:''}</button>`).join('');}
-async function navigate(to){if(!navItems.some(n=>n[0]===to)&&to!=='settings')to='home';const request=++navigationRun;page=to;if(to==='settings')aiConfig=null;if(to!=='cards')cardLoadRun++;if(to!=='progress')progressLoadRun++;$('#nav').innerHTML=nav();$('#settings-nav').classList.toggle('active',page==='settings');$('#page-crumb').textContent=navItems.find(n=>n[0]===to)?.[2]||'偏好设置';render();window.scrollTo(0,0);if(to==='settings'){await loadAIConfig();await loadDistributionInfo();}if(to==='lessons'&&selectedLessonNo===null&&!lesson&&!checkpoint)await openLesson(state.progression.next_lesson||catalog.courses[0].lesson_no);if(to==='cards')await run('正在打开你的卡片…',loadCards);if(to==='grammar_library'||to==='jlpt')await loadStudy(to);if(to==='progress'){const read=++progressLoadRun;await refresh();if(request===navigationRun&&read===progressLoadRun&&page==='progress')render();}}
+async function navigate(to){if(!navItems.some(n=>n[0]===to)&&to!=='settings')to='home';const request=++navigationRun;page=to;if(to==='settings'){aiConfig=null;speechSettings=null};if(to!=='cards')cardLoadRun++;if(to!=='progress')progressLoadRun++;$('#nav').innerHTML=nav();$('#settings-nav').classList.toggle('active',page==='settings');$('#page-crumb').textContent=navItems.find(n=>n[0]===to)?.[2]||'偏好设置';render();window.scrollTo(0,0);if(to==='settings'){await loadAIConfig();await loadSpeechSettings();await loadDistributionInfo();}if(to==='lessons'&&selectedLessonNo===null&&!lesson&&!checkpoint)await openLesson(state.progression.next_lesson||catalog.courses[0].lesson_no);if(to==='cards')await run('正在打开你的卡片…',loadCards);if(to==='grammar_library'||to==='jlpt')await loadStudy(to);if(to==='progress'){const read=++progressLoadRun;await refresh();if(request===navigationRun&&read===progressLoadRun&&page==='progress')render();}}
 function render(){if(!state)return;const f={home:homeView,lessons:lessonsView,cards:cardsView,grammar:grammarView,grammar_library:grammarLibraryView,jlpt:jlptView,progress:progressView,immersion:immersionView,settings:settingsView};$('#main').innerHTML=f[page]();enhanceLearning();syncCourseSelection();}
 function dailyWordView(){
  const header='<div class="card-title"><h3>今日的一点日语</h3><span>DAILY WORD</span></div>';
@@ -273,7 +273,7 @@ function settingsView(){const p=state.profile;return title('学习偏好','找�
          style="width:100%;accent-color:#536b9b">
   <span class="hint">向左更慢，向右更快。1.0× 为默认语速。</span>
 </label>
-<button class="btn primary">保存偏好 ${icon('check')}</button></form></div><div class="card" id="ai-settings">${aiConfigView()}</div>${distributionSettingsHTML()}</div><aside class="stack" style="align-content:start"><div class="card"><h3>你的学习记录</h3><p class="hint">课程、卡片、测验及历史对话记录保存在本机 SQLite 数据库。导出包含个人学习内容，请妥善保存。</p>${btn(icon('download')+' 导出学习档案','export-json','soft','style="margin-top:15px"')}</div><div class="tip-note"><strong>关于隐私与声音</strong>点击 AI 功能后，相关输入、近期学习摘要与错题会发送到你配置的 API 服务。<br>macOS / Windows 朗读均使用 Edge TTS；未缓存的朗读文字会发送到在线语音服务，已缓存音频可离线播放。跟读录音仅保留在本机。</div></aside></div>`;}
+<button class="btn primary">保存偏好 ${icon('check')}</button></form></div><div class="card" id="ai-settings">${aiConfigView()}</div><div class="card" id="speech-settings">${speechSettingsView()}</div>${distributionSettingsHTML()}</div><aside class="stack" style="align-content:start"><div class="card"><h3>你的学习记录</h3><p class="hint">课程、卡片、测验及历史对话记录保存在本机 SQLite 数据库。导出包含个人学习内容，请妥善保存。</p>${btn(icon('download')+' 导出学习档案','export-json','soft','style="margin-top:15px"')}</div><div class="tip-note"><strong>关于隐私与声音</strong>点击 AI 功能后，相关输入、近期学习摘要与错题会发送到你配置的 API 服务。<br>朗读可选择 Edge TTS 或 Gemini TTS；未缓存的文字会发送到所选语音服务。Gemini 失败时会尝试 Edge TTS；两个服务都需要网络，已缓存音频可离线播放。跟读录音仅保留在本机。</div></aside></div>`;}
 async function openLesson(day,generate=false,tab='grammar',regenerate=false){
  if(generate&&generatingLessons.has(day))return;
  const request=++lessonRequest;
@@ -323,7 +323,7 @@ document.addEventListener('submit',async e=>{e.preventDefault();const f=e.target
 async function speakText(text){
  if(!haruHasNative()){toast('日语朗读请在 Haru 桌面 App 中使用。',true);return;}
  const speed=state?.profile?.speech_rate??1.0;
- try{await rpc('speak',{text,rate:0.42*speed});}catch(e){toast(e.message,true);}
+ try{const result=await rpc('speak',{text,rate:0.42*speed});if(result?.fallback)toast('Gemini 朗读失败（'+result.fallback+'），已使用 Edge TTS。');return result;}catch(e){toast(e.message,true);}
 }
 window.haruRecordingStopped=()=>{record=false;if($('#record-btn')){$('#record-btn').innerHTML=icon('mic')+' 录下我的跟读';$('#record-btn').classList.remove('recording');}toast('录音已保存（最长60秒）。');};
 $('#settings-nav').innerHTML=icon('settings')+'偏好设置';

@@ -13,11 +13,12 @@ import portalocker
 from app_paths import storage_root
 from llm import AppError
 from llm_config import read_profiles
+from speech_config import read_settings
 
 SCHEMA_VERSION = 3
 MANAGED = ('.llm-providers.json', 'runtime/haru.sqlite3', 'runtime/study-assets',
            'runtime/exports', 'runtime/backups', 'runtime/speaking-latest.wav',
-           'runtime/speaking-latest.m4a')
+           'runtime/speaking-latest.m4a', '.speech-settings.json')
 RECOVERABLE = frozenset(MANAGED) | {'.env'}  # Recover journals left by older versions.
 
 
@@ -66,6 +67,13 @@ def backup(root, data_dir=None):
             raise AppError('AI 配置文件无效，更新前备份未完成。')
         shutil.copyfile(config, destination / config.name)
         (destination / config.name).chmod(0o600)
+    speech_config = root / '.speech-settings.json'
+    if speech_config.exists() or speech_config.is_symlink():
+        if not speech_config.is_file() or speech_config.is_symlink():
+            raise AppError('朗读配置文件无效，更新前备份未完成。')
+        read_settings(root)
+        shutil.copyfile(speech_config, destination / speech_config.name)
+        (destination / speech_config.name).chmod(0o600)
     atomic_json(destination / 'backup.json', {'schema': SCHEMA_VERSION, 'complete': True})
     return destination
 
@@ -102,6 +110,9 @@ def _empty_target(root):
     config = root / '.llm-providers.json'
     if config.exists() or config.is_symlink():
         raise AppError('当前安装已有 AI 配置。为避免覆盖，请在首次使用的空白安装中导入。')
+    speech_config = root / '.speech-settings.json'
+    if speech_config.exists() or speech_config.is_symlink():
+        raise AppError('当前安装已有朗读配置。为避免覆盖，请在首次使用的空白安装中导入。')
     for name in MANAGED[2:]:
         path = root / name
         if path.exists() and (not path.is_dir() or any(path.iterdir())):
@@ -143,10 +154,12 @@ def import_legacy(source, root):
         # Resolve only after checking components: do not copy data outside the selected tree.
         if any(p.is_symlink() for p in (src, *src.parents)) or any(p.is_symlink() for p in src.rglob('*')):
             raise AppError('旧版数据包含符号链接，请先整理为普通文件后导入。')
-        if name == '.llm-providers.json' and not src.is_file():
-            raise AppError('旧版 AI 配置不是普通文件，未导入。')
+        if name in {'.llm-providers.json', '.speech-settings.json'} and not src.is_file():
+            raise AppError('旧版配置不是普通文件，未导入。')
         if name == '.llm-providers.json':
             read_profiles(source)
+        if name == '.speech-settings.json':
+            read_settings(source)
         dest = stage / 'new' / name
         dest.parent.mkdir(parents=True, exist_ok=True)
         if name == 'runtime/haru.sqlite3':
@@ -155,7 +168,7 @@ def import_legacy(source, root):
             shutil.copytree(src, dest)
         else:
             shutil.copyfile(src, dest)
-            if name == '.llm-providers.json':
+            if name in {'.llm-providers.json', '.speech-settings.json'}:
                 dest.chmod(0o600)
         items.append({'name': name, 'existed': (root / name).exists()})
     # Do not let stale WAL files from the empty target modify the imported snapshot.

@@ -171,9 +171,12 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
         if let process { queue.async { self.stopBackendProcess(process) } }
     }
     func speechFile(_ data: [String:Any]) -> URL? {
-        guard let name = data["audio"] as? String,
-              name.range(of:"^[a-f0-9]{32}\\.mp3$", options:.regularExpression) != nil else { return nil }
-        let folder = dataDir.appendingPathComponent("tts-cache", isDirectory:true).resolvingSymlinksInPath()
+        let engine = data["engine"] as? String ?? "edge"
+        guard engine == "edge" || engine == "gemini", let name = data["audio"] as? String else { return nil }
+        let fileType = engine == "gemini" ? "wav" : "mp3"
+        guard name.range(of:"^[a-f0-9]{32}\\.\(fileType)$", options:.regularExpression) != nil else { return nil }
+        let folderName = engine == "gemini" ? "tts-gemini-cache" : "tts-cache"
+        let folder = dataDir.appendingPathComponent(folderName, isDirectory:true).resolvingSymlinksInPath()
         let file = folder.appendingPathComponent(name)
         guard let info = try? file.resourceValues(forKeys:[.isRegularFileKey, .isSymbolicLinkKey]),
               info.isRegularFile == true, info.isSymbolicLink != true,
@@ -200,7 +203,8 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
                 let player = try AVAudioPlayer(data:audio)
                 guard player.play() else { self.fail(id,"音频无法播放，请检查输出设备。"); return }
                 self.player = player
-                self.ok(id)
+                self.ok(id,["engine":data["engine"] as? String ?? "edge",
+                            "fallback":data["fallback"] as? String ?? ""])
             } catch { self.fail(id,"音频无法播放，请检查输出设备后重试。") }
         }
     }
@@ -319,7 +323,7 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
         } catch {fail(id,"录音启动失败，请检查麦克风与本地文件权限。")}
     }
     func runBackend(_ id:Int,_ action:String,_ params:[String:Any], speechToken:UUID? = nil, completion:(([String:Any])->Void)? = nil) {
-        let actions:Set<String>=["import_legacy","prepare_update","recover_storage","config_get","config_save","grammar_catalog","grammar_detail","grammar_mark","grammar_practice","study_catalog","study_import","study_generate","study_generation_start","study_generation_step","study_generation_status","study_generation_cancel","study_delete","study_start","study_attempt","study_save","study_history","study_mistakes","study_retry","study_summary","study_image","annotate","dictionary","dictionary_add","encounter","encounters","reading_lookup","knowledge","daily_word","daily_word_add","bootstrap","profile","lesson","grade","cards","card_queue","cards_page","card_detail","card_create","card_random","card_seed","review","decode","quiz","immersion","export","ping","history","curriculum","stage_assessment","remedial"]
+        let actions:Set<String>=["import_legacy","prepare_update","recover_storage","config_get","config_save","speech_settings_get","speech_settings_save","speech_voice_create","grammar_catalog","grammar_detail","grammar_mark","grammar_practice","study_catalog","study_import","study_generate","study_generation_start","study_generation_step","study_generation_status","study_generation_cancel","study_delete","study_start","study_attempt","study_save","study_history","study_mistakes","study_retry","study_summary","study_image","annotate","dictionary","dictionary_add","encounter","encounters","reading_lookup","knowledge","daily_word","daily_word_add","bootstrap","profile","lesson","grade","cards","card_queue","cards_page","card_detail","card_create","card_random","card_seed","review","decode","quiz","immersion","export","ping","history","curriculum","stage_assessment","remedial"]
         let finish: ([String:Any]) -> Void = { result in
             DispatchQueue.main.async {
                 if let completion { completion(result) } else { self.reply(id,result) }
@@ -351,7 +355,7 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
                         self.stopBackendProcess(process)
                     }
                 }
-                let deadline = speechToken == nil ? self.backendDeadlineSeconds : 55
+                let deadline = speechToken == nil ? self.backendDeadlineSeconds : 285
                 DispatchQueue.global().asyncAfter(deadline:.now()+deadline,execute:watchdog)
                 var result: [String:Any]?
                 let data=stdout.fileHandleForReading.readDataToEndOfFile()

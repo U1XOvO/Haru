@@ -75,6 +75,7 @@ class SpeechBridgeTests(unittest.TestCase):
     def environment(self, behavior='success'):
         return dict(os.environ, HARU_TEST_BACKEND=str(ROOT / 'backend'),
                     HARU_TEST_BEHAVIOR=behavior, HARU_DATA_DIR=str(self.root),
+                    HARU_STORAGE_DIR=str(self.root),
                     PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8')
 
     def request(self, params=None, behavior='success'):
@@ -91,7 +92,8 @@ class SpeechBridgeTests(unittest.TestCase):
 
     def test_speech_prepare_does_not_import_service_or_initialize_database(self):
         result = self.request()
-        self.assertEqual(result, {'ok': True, 'data': {'audio': 'a'*32+'.mp3', 'transient': False}})
+        self.assertEqual(result, {'ok': True, 'data': {
+            'audio': 'a'*32+'.mp3', 'transient': False, 'engine': 'edge', 'fallback': ''}})
         self.assertTrue((self.root / 'tts-cache' / result['data']['audio']).is_file())
 
     def test_transient_result_is_left_for_native_playback_to_consume(self):

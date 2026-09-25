@@ -6,7 +6,9 @@ from pathlib import Path
 import threading
 
 from desktop_bridge import DesktopError
+from app_paths import storage_root
 from speech import SpeechEngine, SpeechError, normalize
+from speech_google import prepare_speech
 
 
 @dataclass
@@ -20,6 +22,7 @@ class WindowsAudio:
     def __init__(self, data_dir, stopped, *, cache_bytes=32 * 1024 * 1024,
                  cache_entries=128, synthesis_timeout=45):
         self.path = Path(data_dir) / 'speaking-latest.wav'
+        self.data_dir = Path(data_dir)
         self.stopped = stopped
         self.lock = threading.RLock()
         self.recording = False
@@ -71,7 +74,10 @@ class WindowsAudio:
             request.loop = asyncio.get_running_loop()
             request.task = asyncio.current_task()
         try:
-            return await self.engine.prepare(params, cancelled=request.cancelled.is_set)
+            return await prepare_speech(params, self.data_dir,
+                                        cancelled=request.cancelled.is_set,
+                                        config_dir=storage_root(),
+                                        edge_engine=self.engine)
         finally:
             with self.lock:
                 request.loop = request.task = None
@@ -80,6 +86,7 @@ class WindowsAudio:
         request = SpeechRequest()
         audio = None
         played = False
+        outcome = {}
         with self.lock:
             if self.closed:
                 raise DesktopError('应用正在退出。')
@@ -99,6 +106,8 @@ class WindowsAudio:
                         self._stop_audio()
                         raise
                     played = True
+                    outcome = {'engine': getattr(audio, 'engine', 'edge'),
+                               'fallback': getattr(audio, 'fallback', '')}
         except asyncio.CancelledError:
             return
         except SpeechError as error:
@@ -111,6 +120,7 @@ class WindowsAudio:
             with self.lock:
                 if self._speech_request is request:
                     self._speech_request = None
+        return outcome
 
     def perform(self, action, params):
         if action == 'speak':
@@ -118,8 +128,7 @@ class WindowsAudio:
                 normalize(params)
             except SpeechError as error:
                 raise DesktopError(str(error)) from error
-            self._edge_speak(params)
-            return {}
+            return self._edge_speak(params)
         with self.lock:
             if self.closed:
                 raise DesktopError('应用正在退出。')

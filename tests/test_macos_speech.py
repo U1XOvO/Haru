@@ -32,14 +32,14 @@ assert request['action'] == 'speech_prepare'
 params = request['params']
 case = params['text']
 root = Path(os.environ['HARU_DATA_DIR'])
-cache = root / 'tts-cache'
+cache = root / ('tts-gemini-cache' if case == 'gemini-wav' else 'tts-cache')
 cache.mkdir(exist_ok=True)
 if case == 'provider-error':
     result = {'ok': False, 'error': '此内容尚未缓存，请联网后重试。'}
 elif case == 'traversal':
     result = {'ok': True, 'data': {'audio': '../outside.mp3', 'transient': True}}
 else:
-    name = f"{params['fixture_id']:032x}.mp3"
+    name = f"{params['fixture_id']:032x}.{'wav' if case == 'gemini-wav' else 'mp3'}"
     output = cache / name
     if case == 'symlink':
         output.symlink_to(root / 'outside.mp3')
@@ -55,7 +55,9 @@ else:
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     (root / f'ready-{case}').touch()
     time.sleep(params.get('delay', 0))
-    result = {'ok': True, 'data': {'audio': name, 'transient': True}}
+    result = {'ok': True, 'data': {'audio': name, 'transient': True,
+                                  'engine': 'gemini' if case == 'gemini-wav' else 'edge',
+                                  'fallback': ''}}
 print(json.dumps(result, ensure_ascii=False), flush=True)
 '''
 
@@ -169,6 +171,18 @@ start(8,"symlink",8)
 until("symlink rejected") { results[8] != nil }
 expect(results[8]?["ok"] as? Bool == false,"symlink audio is rejected")
 expect((try? String(contentsOf:outside,encoding:.utf8)) == "outside must remain unchanged","invalid transient paths cannot delete external files")
+workersFinished()
+
+// Gemini WAV passes the same native file validation, playback and transient cleanup.
+start(10,"gemini-wav",10)
+acceptsPlayback(10)
+if results[10]?["ok"] as? Bool == true {
+    let data = results[10]?["data"] as? [String:Any] ?? [:]
+    expect(data["engine"] as? String == "gemini","Gemini engine reaches the UI")
+}
+let geminiFile = subject.dataDir.appendingPathComponent("tts-gemini-cache/"+String(format:"%032x",10)+".wav")
+expect(!FileManager.default.fileExists(atPath:geminiFile.path),"Gemini transient is deleted")
+subject.stopAudio()
 workersFinished()
 
 // Shutdown invalidates queued speech and child processes without launching UI.

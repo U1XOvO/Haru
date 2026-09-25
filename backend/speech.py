@@ -21,6 +21,8 @@ class SpeechError(Exception):
 class SpeechAudio:
     path: Path
     transient: bool
+    engine: str = 'edge'
+    fallback: str = ''
 
 
 def normalize(params):
@@ -53,6 +55,15 @@ class SpeechEngine:
         self.cache_entries = max(0, int(cache_entries))
         self.synthesis_timeout = synthesis_timeout
         self.engine = 'edge-tts:' + edge_tts.__version__
+        self.extension = '.mp3'
+        self.provider_label = 'Edge TTS'
+
+    def _normalize(self, params):
+        return normalize(params)
+
+    async def _synthesize(self, text, voice, rate, pending):
+        communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate)
+        await communicate.save(str(pending))
 
     @staticmethod
     def _check_cancelled(cancelled):
@@ -86,7 +97,7 @@ class SpeechEngine:
             try:
                 key, name, size, used = tuple(entry['key']), entry['file'], entry['size'], float(entry['used'])
                 if (len(key) != 4 or not all(isinstance(value, str) for value in key)
-                        or not re.fullmatch(r'[0-9a-f]{32}\.mp3', name)
+                        or not re.fullmatch(r'[0-9a-f]{32}' + re.escape(self.extension), name)
                         or type(size) is not int or size <= 0 or not math.isfinite(used)):
                     continue
             except (KeyError, TypeError, ValueError):
@@ -138,6 +149,11 @@ class SpeechEngine:
         entry = cache.get(key)
         if entry is None:
             return None
+        if not self._valid_cached_audio(self.directory / entry['file']):
+            (self.directory / entry['file']).unlink(missing_ok=True)
+            del cache[key]
+            self._save(cache)
+            return None
         entry['used'] = time.time()
         self._trim(cache, keep=key)
         self._save(cache)
@@ -145,10 +161,14 @@ class SpeechEngine:
             return SpeechAudio(self.directory / entry['file'], False)
         return None
 
+    @staticmethod
+    def _valid_cached_audio(_path):
+        return True
+
     async def prepare(self, params, *, cancelled=lambda: False):
-        text, voice, rate = normalize(params)
+        text, voice, rate = self._normalize(params)
         key = (text, voice, rate, self.engine)
-        pending = self.directory / f'{uuid.uuid4().hex}.pending.mp3'
+        pending = self.directory / f'{uuid.uuid4().hex}.pending{self.extension}'
         created = None
         completed = False
         try:
@@ -164,12 +184,13 @@ class SpeechEngine:
                 self._save(cache)
             # Synthesis and streaming writes never hold the cross-process cache lock.
             try:
-                communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate)
-                await asyncio.wait_for(communicate.save(str(pending)), timeout=self.synthesis_timeout)
+                await asyncio.wait_for(self._synthesize(text, voice, rate, pending), timeout=self.synthesis_timeout)
             except TimeoutError as error:
-                raise SpeechError('Edge TTS 语音生成超时，请检查网络后重试。') from error
+                raise SpeechError(f'{self.provider_label} 语音生成超时，请检查网络后重试。') from error
+            except SpeechError:
+                raise
             except Exception as error:
-                raise SpeechError('Edge TTS 暂时无法生成日语语音，请检查网络后重试。') from error
+                raise SpeechError(f'{self.provider_label} 暂时无法生成日语语音，请检查网络后重试。') from error
             self._check_cancelled(cancelled)
             with self._locked():
                 self._check_cancelled(cancelled)
@@ -181,8 +202,8 @@ class SpeechEngine:
                     return cached
                 size = pending.stat().st_size
                 if size == 0:
-                    raise SpeechError('Edge TTS 未返回有效音频，请稍后重试。')
-                created = pending.with_name(pending.name.replace('.pending.mp3', '.mp3'))
+                    raise SpeechError(f'{self.provider_label} 未返回有效音频，请稍后重试。')
+                created = pending.with_name(pending.name.replace('.pending' + self.extension, self.extension))
                 pending.replace(created)
                 transient = size > self.cache_bytes or self.cache_entries == 0
                 try:

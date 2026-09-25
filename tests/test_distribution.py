@@ -14,6 +14,7 @@ import app_paths
 from llm import AppError
 import llm_config
 import maintenance
+import speech_config
 from service import Service
 
 
@@ -57,6 +58,28 @@ class DistributionTests(unittest.TestCase):
             self.assertEqual((target / '.llm-providers.json').stat().st_mode & 0o777, 0o600)
         self.assertFalse((target / '.env').exists())
         with self.assertRaises(AppError): maintenance.import_legacy(source, target)
+
+    def test_import_and_upgrade_backup_preserve_speech_key(self):
+        source=self.old_data()
+        saved=speech_config.defaults() | {'key':'fixture-speech-key','engine':'gemini'}
+        speech_config.save_settings(saved,source)
+        target=self.root/'target';target.mkdir()
+        maintenance.import_legacy(source,target)
+        self.assertEqual(speech_config.read_settings(target)['key'],'fixture-speech-key')
+        self.assertEqual(speech_config.read_settings(source)['key'],'fixture-speech-key')
+        if os.name!='nt':
+            self.assertEqual((target/'.speech-settings.json').stat().st_mode & 0o777,0o600)
+        backup=maintenance.backup(target,target/'runtime')
+        self.assertEqual(speech_config.read_settings(backup)['key'],'fixture-speech-key')
+
+    def test_invalid_speech_config_blocks_import_before_mutation(self):
+        source=self.old_data()
+        (source/'.speech-settings.json').write_text('{invalid',encoding='utf-8')
+        target=self.root/'target';target.mkdir()
+        with self.assertRaisesRegex(AppError,'朗读配置文件无法读取'):
+            maintenance.import_legacy(source,target)
+        self.assertFalse((target/'.migration.json').exists())
+        self.assertFalse((target/'runtime/haru.sqlite3').exists())
 
     def test_import_into_bootstrapped_empty_install(self):
         source = self.old_data()

@@ -53,6 +53,8 @@ class WindowsAudioTests(unittest.TestCase):
         self.mci = FakeMCI()
         self.calls = []
         self.behavior = self.prepare_audio
+        patcher = patch.object(audio_module, 'storage_root', return_value=self.root)
+        patcher.start(); self.addCleanup(patcher.stop)
         patcher = patch.object(audio_module.ctypes, 'WinDLL', create=True,
                                return_value=types.SimpleNamespace(mciSendStringW=self.mci))
         patcher.start(); self.addCleanup(patcher.stop)
@@ -99,6 +101,28 @@ class WindowsAudioTests(unittest.TestCase):
         with self.assertRaises(audio_module.DesktopError):
             self.speak('a' * 6001)
         self.assertEqual(len(self.calls), 1)
+
+    def test_gemini_wav_and_edge_fallback_report_actual_engine(self):
+        wav = self.root / 'gemini.wav'
+        wav.write_bytes(b'fixture wav')
+
+        async def gemini(*_args, **_kwargs):
+            return speech.SpeechAudio(wav, False, engine='gemini')
+
+        with patch.object(audio_module, 'prepare_speech', gemini):
+            self.assertEqual(self.speak('こんにちは'), {'engine': 'gemini', 'fallback': ''})
+        self.assertIn(f'open "{wav}" type waveaudio alias haru_play', self.mci.commands)
+
+        edge = self.root / 'fallback.mp3'
+        edge.write_bytes(b'fixture mp3')
+
+        async def fallback(*_args, **_kwargs):
+            return speech.SpeechAudio(edge, False, engine='edge', fallback='Google 配额不足')
+
+        with patch.object(audio_module, 'prepare_speech', fallback):
+            self.assertEqual(self.speak('またね'),
+                             {'engine': 'edge', 'fallback': 'Google 配额不足'})
+        self.assertIn(f'open "{edge}" type mpegvideo alias haru_play', self.mci.commands)
 
     def test_shared_engine_error_is_reported_without_system_fallback(self):
         async def failed(params, cancelled):

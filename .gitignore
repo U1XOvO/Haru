@@ -27,6 +27,8 @@
 !/backend/performance.py
 !/backend/service.py
 !/backend/speech.py
+!/backend/speech_config.py
+!/backend/speech_google.py
 !/backend/speech_worker.py
 !/backend/study.py
 !/backend/study_generation.py
@@ -91,6 +93,9 @@
 !/tests/test_study_performance_ui.js
 !/tests/test_windows_audio.py
 !/tests/test_speech.py
+!/tests/test_speech_google.py
+!/tests/test_speech_config.py
+!/tests/test_speech_settings_ui.js
 !/tests/test_speech_bridge.py
 !/tests/test_speech_ui.js
 !/tests/test_speech_profile.py
@@ -98,3 +103,4 @@
 !/tests/test_llm_config.py
 !/tests/test_llm_config_ui.js
 !/ui/release.js
+!/ui/speech_settings.js

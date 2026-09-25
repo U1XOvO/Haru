@@ -9,14 +9,18 @@ import threading
 from app_paths import storage_root
 from llm import AppError
 from speech import SpeechEngine, SpeechError
+from speech_google import prepare_speech
 
 
-def _audio_path(value, data_dir):
+def _audio_path(value, data_dir, engine='edge'):
     """Expose only a controlled cache filename, never a caller-provided path."""
     path = Path(value)
-    cache = data_dir / 'tts-cache'
+    if engine not in ('edge', 'gemini'):
+        raise AppError('朗读音频文件无效，请重新播放。')
+    cache = data_dir / ('tts-gemini-cache' if engine == 'gemini' else 'tts-cache')
     folder = cache.resolve()
-    if (not re.fullmatch(r'[a-f0-9]{32}\.mp3', path.name)
+    extension = 'wav' if engine == 'gemini' else 'mp3'
+    if (not re.fullmatch(r'[a-f0-9]{32}\.' + extension, path.name)
             or cache.is_symlink() or path.is_symlink() or not path.is_file()
             or path.resolve().parent != folder):
         raise AppError('朗读音频文件无效，请重新播放。')
@@ -42,14 +46,17 @@ def prepare(params, data_dir=None):
         state['loop'] = asyncio.get_running_loop()
         try:
             state['task'] = asyncio.create_task(
-                SpeechEngine(directory).prepare(params, cancelled=cancelled.is_set))
+                prepare_speech(params, directory, cancelled=cancelled.is_set,
+                               edge_engine=SpeechEngine(directory)))
             result = await state['task']
-            path = _audio_path(result.path, directory)
+            engine = getattr(result, 'engine', 'edge')
+            path = _audio_path(result.path, directory, engine)
             if cancelled.is_set():
                 if result.transient:
                     path.unlink(missing_ok=True)
                 return {'cancelled': True}
-            return {'audio': path.name, 'transient': bool(result.transient)}
+            return {'audio': path.name, 'transient': bool(result.transient),
+                    'engine': engine, 'fallback': getattr(result, 'fallback', '')}
         except asyncio.CancelledError:
             # The shared engine's finally block removes its own pending files.
             return {'cancelled': True}
