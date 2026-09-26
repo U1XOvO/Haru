@@ -150,7 +150,8 @@ class Host:
                     self.maintenance = False
                 return result
             elif action in {'speak', 'audio_toggle_pause', 'audio_status', 'record_start', 'record_stop', 'record_play', 'study_stop_audio'}:
-                data = self.audio.perform(action, params)
+                data = self.audio.perform(action, params, on_progress=lambda event:
+                    self.window.run_js(f'window.haruProgress?.({message["id"]},{json.dumps(event)})'))
             elif action == 'study_pick':
                 import webview
                 selection = self.window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=False,
@@ -183,7 +184,9 @@ class Host:
             else:
                 if action in {'prepare_update', 'recover_storage'}:
                     raise DesktopError('此操作只能由应用内部发起。')
-                return self.backend.request(message)
+                def progress(event):
+                    self.window.run_js(f'window.haruProgress?.({message["id"]},{json.dumps(event, ensure_ascii=False)})')
+                return self.backend.request(message, on_progress=progress)
             return {'ok': True, 'data': data}
         except DesktopError as error:
             return {'ok': False, 'error': str(error)}

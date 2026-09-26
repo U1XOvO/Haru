@@ -13,7 +13,7 @@ assert.match(run('aiConfigView()'),/data-ai-add/);
 assert.match(run('aiConfigView()'),/name="max_tokens"/);
 assert.match(run('aiConfigView()'),/仅支持 OpenAI 兼容接口/);
 assert.match(run('aiConfigView()'),/普通教学、词卡、注音、周测、连接测试/);
-assert.match(run('aiConfigView()'),/沉浸故事<\/td><td>0\.55<\/td><td>10000/);
+assert.match(run('aiConfigView()'),/沉浸故事<\/td><td>0\.55<\/td><td>16000/);
 assert.match(run('aiConfigView()'),/自定义思考强度/);
 assert.doesNotMatch(run('aiConfigView()'),/<option value="auto"/);
 assert.doesNotMatch(run('aiConfigView()'),/参数适配|输出上限字段|其他参数|frequency_penalty|presence_penalty|name="seed"/);

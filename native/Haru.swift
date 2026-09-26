@@ -1,11 +1,68 @@
 import AppKit
 import WebKit
 import AVFoundation
+import AudioToolbox
 import UniformTypeIdentifiers
 import Darwin
 #if HARU_RELEASE
 import Sparkle
 #endif
+
+// Native continuous PCM playback; all methods and accounting run on the main queue.
+final class StreamingPCMPlayer {
+    let engine: AVAudioEngine
+    let node: AVAudioPlayerNode
+    let format = AVAudioFormat(standardFormatWithSampleRate:24000,channels:1)!
+    var queued = 0
+    var bytes = 0
+    var ended = false
+    var stopped = false
+    var paused = false
+    var state: String { stopped || (ended && queued == 0) ? "idle" : paused ? "paused" : "playing" }
+    init() throws {
+        // AVAudioPlayerNode raises an Objective-C exception (not a Swift error)
+        // when system Audio Units are unavailable, e.g. inside a restricted host.
+        var component = AudioComponentDescription(componentType:kAudioUnitType_Generator,
+            componentSubType:0,componentManufacturer:kAudioUnitManufacturer_Apple,
+            componentFlags:0,componentFlagsMask:0)
+        guard AudioComponentFindNext(nil,&component) != nil else { throw NSError(domain:"HaruAudio",code:3) }
+        engine = AVAudioEngine()
+        node = AVAudioPlayerNode()
+        let output = engine.outputNode.outputFormat(forBus:0)
+        guard output.sampleRate > 0, output.channelCount > 0 else { throw NSError(domain:"HaruAudio",code:3) }
+        engine.attach(node)
+        engine.connect(node,to:engine.mainMixerNode,format:format)
+        try engine.start()
+    }
+    func append(_ data:Data) throws {
+        bytes += data.count
+        guard !stopped, !ended, bytes <= 20 * 1024 * 1024,
+              let buffer = AVAudioPCMBuffer(pcmFormat:format,frameCapacity:AVAudioFrameCount(data.count / 2)),
+              let samples = buffer.floatChannelData?[0] else { throw NSError(domain:"HaruAudio",code:2) }
+        let raw = [UInt8](data)
+        for index in 0..<(raw.count / 2) {
+            let value = UInt16(raw[index * 2]) | (UInt16(raw[index * 2 + 1]) << 8)
+            samples[index] = Float(Int16(bitPattern:value)) / 32768
+        }
+        buffer.frameLength = buffer.frameCapacity
+        queued += 1
+        node.scheduleBuffer(buffer,completionCallbackType:.dataPlayedBack) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, !self.stopped else { return }
+                self.queued -= 1
+                if self.ended && self.queued == 0 { self.engine.stop() }
+            }
+        }
+        if !paused && !node.isPlaying { node.play() }
+    }
+    func finish() { ended = true; if queued == 0 { engine.stop() } }
+    func togglePause() {
+        guard state != "idle" else { return }
+        paused.toggle()
+        if paused { node.pause() } else { node.play() }
+    }
+    func stop() { stopped = true; node.stop(); engine.stop(); queued = 0; paused = false }
+}
 
 final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate {
     var window: NSWindow!
@@ -33,6 +90,7 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
     var speechReplyID: Int?
     var recorder: AVAudioRecorder?
     var player: AVAudioPlayer?
+    var pcmPlayer: StreamingPCMPlayer?
     var audioPaused = false
     var recordingTimer: Timer?
     let processLock = NSLock()
@@ -168,11 +226,16 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
         speechProcess = nil
         processLock.unlock()
         player?.stop(); player = nil
+        pcmPlayer?.stop(); pcmPlayer = nil
         audioPaused = false
         if let id = speechReplyID { speechReplyID = nil; ok(id) }
         if let process { queue.async { self.stopBackendProcess(process) } }
     }
     func toggleAudioPause(_ id:Int) {
+        if let pcmPlayer {
+            pcmPlayer.togglePause(); audioPaused = pcmPlayer.paused
+            ok(id,["state":pcmPlayer.state]); return
+        }
         guard let player else { audioPaused = false; ok(id,["state":"idle"]); return }
         if audioPaused {
             guard player.play() else {fail(id,"无法继续播放，请检查输出设备。");return}
@@ -188,6 +251,7 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
         }
     }
     func audioState() -> String {
+        if let pcmPlayer { return pcmPlayer.state }
         if audioPaused { return "paused" }
         return player?.isPlaying == true ? "playing" : "idle"
     }
@@ -216,9 +280,18 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
             guard self.isCurrentSpeech(token) else { return }
             self.speechReplyID = nil
             guard result["ok"] as? Bool == true else {
+                self.pcmPlayer?.stop(); self.pcmPlayer = nil
                 self.fail(id,result["error"] as? String ?? "日语语音生成失败，请重试。"); return
             }
             if data["cancelled"] as? Bool == true { self.ok(id); return }
+            if data["streamed"] as? Bool == true {
+                guard result["_speechStreamValidated"] as? Bool == true, let pcm = self.pcmPlayer else {
+                    self.pcmPlayer?.stop(); self.pcmPlayer = nil
+                    self.fail(id,"音频流未能播放，请重试。"); return
+                }
+                pcm.finish()
+                self.ok(id,["engine":"gemini", "fallback":""]); return
+            }
             guard let audio = result["_speechAudio"] as? Data else { self.fail(id,"朗读音频不可用，请重试。"); return }
             do {
                 let player = try AVAudioPlayer(data:audio)
@@ -355,7 +428,7 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
             }
         }
         guard actions.contains(action) || (action == "speech_prepare" && speechToken != nil),
-              let input=try? JSONSerialization.data(withJSONObject:["action":action,"params":params]),input.count<=100000 else {
+              let input=try? JSONSerialization.data(withJSONObject:["action":action,"params":params,"stream":true]),input.count<=100000 else {
             finish(["ok":false,"error":"操作无效或输入过长。"]); return
         }
         let interpreter=python;let project=root!;let storage=dataDir!
@@ -383,9 +456,36 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
                 // First playback may design a voice before synthesizing speech.
                 let deadline = speechToken == nil ? self.backendDeadlineSeconds : 540
                 DispatchQueue.global().asyncAfter(deadline:.now()+deadline,execute:watchdog)
+                defer { watchdog.cancel() }
                 var result: [String:Any]?
-                let data=stdout.fileHandleForReading.readDataToEndOfFile()
-                result=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any]
+                var buffer = Data()
+                var received = 0
+                while true {
+                    let chunk = stdout.fileHandleForReading.availableData
+                    if chunk.isEmpty { break }
+                    received += chunk.count
+                    if received > 64 * 1024 * 1024 { throw NSError(domain:"HaruIPC",code:1) }
+                    buffer.append(chunk)
+                    while let newline = buffer.firstIndex(of:10) {
+                        let line = Data(buffer[..<newline]); buffer.removeSubrange(...newline)
+                        if line.count > 2_000_000 { throw NSError(domain:"HaruIPC",code:1) }
+                        guard let event = try JSONSerialization.jsonObject(with:line) as? [String:Any] else { throw NSError(domain:"HaruIPC",code:2) }
+                        if event["event"] as? String == "generation" || event["event"] as? String == "audio" {
+                            DispatchQueue.main.async {
+                                do { try self.receiveProgress(id,event,speechToken:speechToken) }
+                                catch {
+                                    if let token = speechToken, self.isCurrentSpeech(token) {
+                                        self.speechReplyID = nil
+                                        self.stopAudio()
+                                        self.fail(id,"音频流无法播放，请检查输出设备后重试。")
+                                    }
+                                }
+                            }
+                        } else { result = event }
+                    }
+                    if buffer.count > 2_000_000 { throw NSError(domain:"HaruIPC",code:1) }
+                }
+                if !buffer.isEmpty { throw NSError(domain:"HaruIPC",code:2) }
                 process.waitUntilExit();watchdog.cancel()
                 let didTimeOut = timedOut.wait(timeout: .now()) == .success
                 let speechData = result?["data"] as? [String:Any]
@@ -397,12 +497,35 @@ final class HaruApp: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WK
                     // shutdown prevents the queued main-thread completion from running.
                     defer { if data["transient"] as? Bool == true { try? FileManager.default.removeItem(at:file) } }
                     if !didTimeOut && self.isCurrentSpeech(token) {
-                        if let audio = try? Data(contentsOf:file) { result?["_speechAudio"] = audio }
+                        if data["streamed"] as? Bool == true { result?["_speechStreamValidated"] = true }
+                        else if let audio = try? Data(contentsOf:file) { result?["_speechAudio"] = audio }
                         else { result = ["ok":false,"error":"朗读音频不可用，请重试。"] }
                     }
                 }
                 finish(result ?? ["ok":false,"error":"本地服务未返回结果，请重新打开或重新安装 Haru。"])
-            } catch { finish(["ok":false,"error":"无法启动 Haru 运行组件，请重新构建或重新安装。"]) }
+            } catch {
+                self.stopBackendProcess(process)
+                finish(["ok":false,"error":"本地生成或播放未完成，请重试。"])
+            }
+        }
+    }
+
+    func receiveProgress(_ id:Int,_ event:[String:Any],speechToken:UUID?) throws {
+        if event["event"] as? String == "audio" {
+            guard let token = speechToken, isCurrentSpeech(token) else { return }
+            if event["phase"] as? String == "reset" {
+                pcmPlayer?.stop(); pcmPlayer = nil; audioPaused = false
+            } else if event["phase"] as? String == "chunk" {
+                guard let encoded = event["pcm"] as? String, let data = Data(base64Encoded:encoded),
+                      !data.isEmpty, data.count <= 24000, data.count % 2 == 0 else { throw NSError(domain:"HaruAudio",code:1) }
+                if pcmPlayer == nil { pcmPlayer = try StreamingPCMPlayer() }
+                try pcmPlayer!.append(data)
+            }
+        }
+        if let data = try? JSONSerialization.data(withJSONObject:event),let json=String(data:data,encoding:.utf8) {
+            // PCM stays in the native player; the renderer receives status only.
+            let publicJSON = event["event"] as? String == "audio" ? "{event:'audio',phase:'\(event["phase"] as? String == "reset" ? "reset" : "chunk")'}" : json
+            web?.evaluateJavaScript("window.haruProgress?.(\(id),\(publicJSON))",completionHandler:nil)
         }
     }
     func finishSmoke(_ success:Bool) {

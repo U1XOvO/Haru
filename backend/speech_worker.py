@@ -1,5 +1,6 @@
 """Cancellable Edge TTS IPC worker; no learning database is opened here."""
 import asyncio
+import base64
 import os
 from pathlib import Path
 import re
@@ -10,6 +11,7 @@ from app_paths import storage_root
 from llm import AppError
 from speech import SpeechEngine, SpeechError
 from speech_google import prepare_speech
+from generation import emit, has_progress
 
 
 def _audio_path(value, data_dir, engine='edge'):
@@ -44,10 +46,15 @@ def prepare(params, data_dir=None):
         if cancelled.is_set():
             return {'cancelled': True}
         state['loop'] = asyncio.get_running_loop()
+        def on_audio(phase, raw):
+            if cancelled.is_set(): raise asyncio.CancelledError()
+            emit({'event': 'audio', 'phase': phase,
+                  'pcm': base64.b64encode(raw).decode('ascii')})
         try:
             state['task'] = asyncio.create_task(
                 prepare_speech(params, directory, cancelled=cancelled.is_set,
-                               edge_engine=SpeechEngine(directory)))
+                               edge_engine=SpeechEngine(directory),
+                               on_audio=on_audio if has_progress() else None))
             result = await state['task']
             engine = getattr(result, 'engine', 'edge')
             path = _audio_path(result.path, directory, engine)
@@ -56,7 +63,8 @@ def prepare(params, data_dir=None):
                     path.unlink(missing_ok=True)
                 return {'cancelled': True}
             return {'audio': path.name, 'transient': bool(result.transient),
-                    'engine': engine, 'fallback': getattr(result, 'fallback', '')}
+                    'engine': engine, 'fallback': getattr(result, 'fallback', ''),
+                    **({'streamed': True} if getattr(result, 'streamed', False) else {})}
         except asyncio.CancelledError:
             # The shared engine's finally block removes its own pending files.
             return {'cancelled': True}

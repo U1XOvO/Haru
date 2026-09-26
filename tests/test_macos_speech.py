@@ -19,6 +19,7 @@ SWIFTC = shutil.which('swiftc')
 
 FAKE_BRIDGE = r'''
 import io
+import base64
 import json
 import os
 from pathlib import Path
@@ -32,14 +33,20 @@ assert request['action'] == 'speech_prepare'
 params = request['params']
 case = params['text']
 root = Path(os.environ['HARU_DATA_DIR'])
-cache = root / ('tts-gemini-cache' if case == 'gemini-wav' else 'tts-cache')
+cache = root / ('tts-gemini-cache' if case in ('gemini-wav', 'stream-complete') else 'tts-cache')
 cache.mkdir(exist_ok=True)
+if case == 'stream':
+    print(json.dumps({'event':'audio','phase':'chunk','pcm':base64.b64encode(b'\0\0'*12000).decode()}),flush=True)
+    (root/'ready-stream').touch()
+    time.sleep(.6)
+    print(json.dumps({'ok':False,'error':'fixture stream interruption'}),flush=True)
+    sys.exit(0)
 if case == 'provider-error':
     result = {'ok': False, 'error': '此内容尚未缓存，请联网后重试。'}
 elif case == 'traversal':
     result = {'ok': True, 'data': {'audio': '../outside.mp3', 'transient': True}}
 else:
-    name = f"{params['fixture_id']:032x}.{'wav' if case == 'gemini-wav' else 'mp3'}"
+    name = f"{params['fixture_id']:032x}.{'wav' if case in ('gemini-wav', 'stream-complete') else 'mp3'}"
     output = cache / name
     if case == 'symlink':
         output.symlink_to(root / 'outside.mp3')
@@ -54,10 +61,12 @@ else:
     # Exercise late *successful* results after stop, not only killed workers.
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     (root / f'ready-{case}').touch()
+    if case == 'stream-complete':
+        print(json.dumps({'event':'audio','phase':'chunk','pcm':base64.b64encode(b'\0\0'*12000).decode()}),flush=True)
     time.sleep(params.get('delay', 0))
     result = {'ok': True, 'data': {'audio': name, 'transient': True,
-                                  'engine': 'gemini' if case == 'gemini-wav' else 'edge',
-                                  'fallback': ''}}
+                                  'engine': 'gemini' if case in ('gemini-wav', 'stream-complete') else 'edge',
+                                  'fallback': '', 'streamed': case == 'stream-complete'}}
 print(json.dumps(result, ensure_ascii=False), flush=True)
 '''
 
@@ -74,6 +83,7 @@ try Data("outside must remain unchanged".utf8).write(to:outside)
 var results: [Int:[String:Any]] = [:]
 var playbackAttempts = 0
 var playbackSuccesses = 0
+var streamSuccesses = 0
 
 func expect(_ condition: @autoclosure () -> Bool,_ message:String) {
     if !condition() { fputs("FAIL: \(message)\n",stderr); exit(1) }
@@ -197,6 +207,33 @@ expect(!FileManager.default.fileExists(atPath:geminiFile.path),"Gemini transient
 subject.stopAudio()
 workersFinished()
 
+// An audio event must reach the player before the slow worker finishes.
+start(11,"stream",11)
+until("stream starts or device rejects") { subject.pcmPlayer != nil || results[11] != nil }
+if subject.pcmPlayer != nil {
+    expect(results[11] == nil,"PCM playback precedes final backend result")
+    expect(subject.audioState() == "playing","stream is playing during download")
+    expect(togglePause(12) == "paused","stream pauses while download continues")
+    expect(togglePause(13) == "playing","stream resumes without restarting")
+    subject.stopAudio()
+    expect(subject.pcmPlayer == nil,"stop releases stream player")
+}
+workersFinished()
+expect(subject.pcmPlayer == nil,"late stream result cannot restart playback")
+
+start(14,"stream-complete",14,0.6)
+until("complete stream starts or device rejects") { subject.pcmPlayer != nil || results[14] != nil }
+if subject.pcmPlayer != nil {
+    expect(results[14] == nil,"complete PCM stream starts before final response")
+    until("stream final result") { results[14] != nil }
+    expect(results[14]?["ok"] as? Bool == true,"successful stream has a successful final response")
+    streamSuccesses += 1
+    expect(subject.player == nil,"cached WAV must not replay the streamed audio")
+    expect(subject.pcmPlayer?.ended == true,"stream receives completion marker")
+}
+subject.stopAudio()
+workersFinished()
+
 // Shutdown invalidates queued speech and child processes without launching UI.
 start(9,"shutdown",9,0.35)
 ready("shutdown")
@@ -217,7 +254,7 @@ expect(!FileManager.default.fileExists(atPath:audio(9).path),"shutdown cleanup c
 workersFinished()
 expect(subject.player == nil,"shutdown completion never plays late audio")
 expect(!FileManager.default.fileExists(atPath:audio(9).path),"shutdown transient is deleted")
-print("macOS native IPC checks passed; silent playback attempts=\(playbackAttempts), successful=\(playbackSuccesses)")
+print("macOS native IPC checks passed; silent playback attempts=\(playbackAttempts), successful=\(playbackSuccesses), completed PCM streams=\(streamSuccesses)")
 '''
 
 

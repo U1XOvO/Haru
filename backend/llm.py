@@ -5,6 +5,7 @@ import urllib.parse
 
 from app_paths import resource_root
 from llm_config import AppError, configuration, validate_base
+from generation import Preview, streaming_text
 
 ROOT = resource_root()
 
@@ -28,9 +29,9 @@ def build_payload(c, task, context, schema):
     temperature = 0.55
     max_tokens = 5000
     if isinstance(context, dict) and context.get('lesson_design'):
-        max_tokens = 10000
+        max_tokens = 24000
     elif isinstance(context, dict) and context.get('immersion_story'):
-        max_tokens = 10000
+        max_tokens = 16000
     if is_jlpt:
         from jlpt_quality import SYSTEM as JLPT_SYSTEM
         system = JLPT_SYSTEM
@@ -45,6 +46,13 @@ def build_payload(c, task, context, schema):
         response_format={'type': 'json_object'},
     )
     reasoning=c.get('reasoning','omit')
+    if c.get('task_reasoning', True):
+        if role in ('reviewer', 'global_reviewer'):
+            reasoning = 'high'
+        elif isinstance(schema, dict) and ('word' in schema or 'cards' in schema or 'tokens' in schema or set(schema) == {'ok'}):
+            reasoning = 'off'
+        else:
+            reasoning = 'low'
     if reasoning == 'auto': reasoning = 'omit'
     if reasoning != 'omit':
         payload['reasoning_effort']=('none' if reasoning=='off' else
@@ -56,6 +64,36 @@ def build_payload(c, task, context, schema):
         payload.pop('max_tokens',None)
     if c.get('top_p') is not None: payload['top_p']=c['top_p']
     return payload
+
+
+def streamed_result(client, payload):
+    """Never forward provider events or reasoning to the desktop renderer."""
+    preview = Preview()
+    content, size, reasoning, finish, model, usage = '', 0, False, None, payload['model'], {}
+    with client.chat.completions.create(**payload, stream=True) as stream:
+        for chunk in stream:
+            model = chunk.model or model
+            if chunk.usage:
+                usage = chunk.usage.model_dump()
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            delta = choice.delta
+            reasoning = reasoning or bool(getattr(delta, 'reasoning_content', None))
+            if getattr(delta, 'refusal', None):
+                raise AppError('AI 未能生成这段内容，请调整输入后重试。')
+            piece = delta.content or ''
+            size += len(piece.encode('utf-8')) + len(str(getattr(delta, 'reasoning_content', '') or '').encode('utf-8'))
+            if size > 1_000_000:
+                raise AppError('API 返回过大，请缩短请求后重试。')
+            content += piece
+            if piece: preview.update(content)
+            if choice.finish_reason: finish = choice.finish_reason
+    if finish is None:
+        raise AppError('AI 返回中断，本次结果未保存，请重试。')
+    preview.update(content, final=True)
+    return dict(model=model, usage=usage, choices=[dict(finish_reason=finish,
+                message=dict(content=content, reasoning_content=reasoning))])
 
 
 def generate(task, context, schema):
@@ -75,13 +113,16 @@ def generate(task, context, schema):
                     max_retries=c.get('retries',1),
                     http_client=DefaultHttpxClient(follow_redirects=False)) as client:
             payload = build_payload(c, task, context, schema)
-            with client.chat.completions.with_streaming_response.create(**payload) as response:
-                body = bytearray()
-                for chunk in response.iter_bytes(chunk_size=65_536):
-                    if len(body) + len(chunk) > 1_000_000:
-                        raise AppError('API 返回过大，请缩短请求后重试。')
-                    body.extend(chunk)
-        result = json.loads(body)
+            if streaming_text():
+                result = streamed_result(client, payload)
+            else:
+                with client.chat.completions.with_streaming_response.create(**payload) as response:
+                    body = bytearray()
+                    for chunk in response.iter_bytes(chunk_size=65_536):
+                        if len(body) + len(chunk) > 1_000_000:
+                            raise AppError('API 返回过大，请缩短请求后重试。')
+                        body.extend(chunk)
+                result = json.loads(body)
         choice = result['choices'][0]
         if choice.get('finish_reason') == 'length':
             raise AppError('AI 输出被截断，请缩短内容后重试。')

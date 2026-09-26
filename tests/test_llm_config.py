@@ -107,8 +107,8 @@ class ProviderTests(unittest.TestCase):
         self.assertFalse((self.root / '.llm-providers.json').exists())
 
     def test_task_budgets_use_openai_compatible_max_tokens(self):
-        cases=[({},5000),(None,5000),({'lesson_design':True},10000),
-               ({'immersion_story':True},10000),
+        cases=[({},5000),(None,5000),({'lesson_design':True},24000),
+               ({'immersion_story':True},16000),
                ({'_jlpt_role':'author','count':2},8000),
                ({'_jlpt_role':'reviewer','count':2,'type_id':'grammar_order'},8000),
                ({'_jlpt_role':'explanation_editor','count':4},8000),
@@ -118,10 +118,11 @@ class ProviderTests(unittest.TestCase):
                 payload=llm.build_payload(self.row(),'task',context,{})
                 self.assertEqual(payload['max_tokens'],tokens)
                 self.assertNotIn('max_completion_tokens',payload)
-                self.assertNotIn('reasoning_effort',payload)
+                expected='high' if isinstance(context,dict) and context.get('_jlpt_role') in ('reviewer','global_reviewer') else 'low'
+                self.assertEqual(payload['reasoning_effort'],expected)
 
     def test_explicit_parameters_override_every_task(self):
-        c=self.row(reasoning='off',max_tokens=900,temperature=0.2,top_p=0.8)
+        c=self.row(task_reasoning=False,reasoning='off',max_tokens=900,temperature=0.2,top_p=0.8)
         for context in [{},{'lesson_design':True},{'immersion_story':True},
                         {'_jlpt_role':'global_reviewer','count':80}]:
             payload=llm.build_payload(c,'task',context,{})
@@ -133,17 +134,17 @@ class ProviderTests(unittest.TestCase):
         payload=llm.build_payload(c | dict(reasoning='omit',omit_temperature=True),'task',{}, {})
         self.assertNotIn('extra_body',payload)
         self.assertNotIn('temperature',payload)
-        payload=llm.build_payload(self.row(reasoning='high'),'task',{}, {})
+        payload=llm.build_payload(self.row(task_reasoning=False,reasoning='high'),'task',{}, {})
         self.assertEqual(payload['reasoning_effort'],'high')
         self.assertNotIn('extra_body',payload)
-        payload=llm.build_payload(self.row(reasoning='custom',reasoning_custom='xhigh'),'task',{}, {})
+        payload=llm.build_payload(self.row(task_reasoning=False,reasoning='custom',reasoning_custom='xhigh'),'task',{}, {})
         self.assertEqual(payload['reasoning_effort'],'xhigh')
         payload=llm.build_payload(c | dict(omit_token_limit=True),'task',{}, {})
         self.assertNotIn('max_tokens',payload)
         self.assertNotIn('max_completion_tokens',payload)
 
     def test_removed_legacy_parameters_are_ignored_and_not_saved(self):
-        old=self.row(adapter='deepseek',token_parameter='max_completion_tokens',reasoning='auto',
+        old=self.row(task_reasoning=False,adapter='deepseek',token_parameter='max_completion_tokens',reasoning='auto',
                      frequency_penalty=1,presence_penalty=1,seed=7)
         legacy_payload=llm.build_payload(old,'task',{}, {})
         self.assertNotIn('reasoning_effort',legacy_payload)

@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Single-request JSON IPC. stdout contains only the response; saved secrets are never returned."""
+"""Single-request JSON IPC: optional progress lines, then one final response; no saved secrets."""
 import json
 import sys
 from llm import AppError
+from generation import progress_scope
+
+def send(value):
+    print(json.dumps(value, ensure_ascii=False), flush=True)
 
 def main():
     # Windows pipes otherwise use the active ANSI code page, losing Japanese.
@@ -13,6 +17,8 @@ def main():
         if len(raw)>100_000: raise AppError('请求过大。')
         req=json.loads(raw)
         if not isinstance(req,dict): raise AppError('请求格式无效。')
+        scope = progress_scope(req.get('action'), send if req.get('stream') is True else None)
+        scope.__enter__()
         if req.get('action') == 'speech_prepare':
             from speech_worker import prepare
             data = prepare(req.get('params', {}))
@@ -44,5 +50,6 @@ def main():
     except Exception: out={'ok':False,'error':'本地处理未完成，请检查输入或重试。已有记录已保留。'}
     finally:
         if app: app.close()
-    print(json.dumps(out,ensure_ascii=False))
+        if 'scope' in locals(): scope.__exit__(None, None, None)
+    send(out)
 if __name__=='__main__': main()

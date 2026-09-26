@@ -23,6 +23,7 @@ class SpeechAudio:
     transient: bool
     engine: str = 'edge'
     fallback: str = ''
+    streamed: bool = False
 
 
 def normalize(params):

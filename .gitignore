@@ -22,6 +22,8 @@
 !/backend/learning.py
 !/backend/lesson_design.py
 !/backend/llm.py
+!/backend/generation.py
+!/backend/sse.py
 !/backend/llm_config.py
 !/backend/progression.py
 !/backend/performance.py
@@ -39,6 +41,7 @@
 !/native/desktop_bridge.py
 !/native/windows_app.py
 !/native/windows_audio.py
+!/native/windows_pcm.py
 !/native/windows_entry.py
 !/pyproject.toml
 !/scripts/app_config.py
@@ -56,6 +59,7 @@
 !/start.command
 !/start.py
 !/ui/app.js
+!/ui/generation.js
 !/ui/brand-icon.png
 !/ui/desktop.js
 !/ui/garden.svg
@@ -93,6 +97,10 @@
 !/tests/test_study_performance_ui.js
 !/tests/test_windows_audio.py
 !/tests/test_speech.py
+!/tests/test_generation_stream.py
+!/tests/test_stream_transport.py
+!/tests/test_generation_ui.js
+!/tests/test_speech_stream.py
 !/tests/test_speech_google.py
 !/tests/test_speech_config.py
 !/tests/test_speech_settings_ui.js
