@@ -34,7 +34,7 @@ def profile_defaults():
     return {
         'reasoning': 'omit', 'reasoning_custom': '', 'temperature': None,
         'top_p': None, 'max_tokens': None, 'omit_temperature': False,
-        'omit_token_limit': False, 'retries': 1,
+        'omit_token_limit': False, 'retries': 1, 'task_reasoning': True,
     }
 
 
@@ -105,10 +105,11 @@ def normalize_profile(raw, previous=None):
             raise AppError(f'{field} 应在 {low}–{high} 之间{suffix}')
         profile[field] = int(value) if integral else value
 
-    for field in ('omit_temperature', 'omit_token_limit'):
-        if type(raw.get(field, False)) is not bool:
+    for field in ('omit_temperature', 'omit_token_limit', 'task_reasoning'):
+        default = field == 'task_reasoning'
+        if type(raw.get(field, default)) is not bool:
             raise AppError('参数开关格式无效。')
-        profile[field] = raw.get(field, False)
+        profile[field] = raw.get(field, default)
     return profile
 
 

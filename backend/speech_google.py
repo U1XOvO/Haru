@@ -15,6 +15,7 @@ from app_paths import storage_root
 from llm import AppError
 from speech import SpeechEngine, SpeechError
 from speech_config import MODEL, read_settings, style_for, _atomic_save
+from sse import events
 
 
 API = 'https://generativelanguage.googleapis.com/v1beta'
@@ -118,7 +119,7 @@ async def create_voice(identity, root=None, *, force=False):
 
 
 class GeminiSpeechEngine(SpeechEngine):
-    def __init__(self, data_dir, settings, voice_id):
+    def __init__(self, data_dir, settings, voice_id, on_audio=None):
         super().__init__(data_dir, cache_bytes=64 * 1024 * 1024,
                          synthesis_timeout=settings['timeout'] * (settings['retries'] + 1) + 3)
         self.directory = Path(data_dir).absolute() / 'tts-gemini-cache'
@@ -127,6 +128,8 @@ class GeminiSpeechEngine(SpeechEngine):
         self.provider_label = 'Gemini TTS'
         self.settings = settings
         self.voice_id = voice_id
+        self.on_audio = on_audio
+        self.streamed = False
 
     @staticmethod
     def _valid_cached_audio(path):
@@ -152,6 +155,8 @@ class GeminiSpeechEngine(SpeechEngine):
                 'type': 'speech_metadata', 'style': style}]}]}],
             'response_format': {'type': 'audio'},
             'generation_config': {'speech_config': [{'voice': voice}]}}
+        if self.on_audio is not None:
+            return await self._stream(payload, pending)
         response = await _post(API + '/interactions', self.settings['key'], payload,
                                self.settings['timeout'], self.settings['retries'], voice=True)
         steps = _json(response).get('steps', [])
@@ -172,13 +177,69 @@ class GeminiSpeechEngine(SpeechEngine):
             raise SpeechError('Gemini 未返回可播放的 WAV 音频。') from error
         pending.write_bytes(raw)
 
+    async def _stream(self, payload, pending):
+        payload = dict(payload, stream=True,
+                       response_format={'type': 'audio', 'mime_type': 'audio/l16', 'sample_rate': 24000})
+        # Retry only before any sound has been delivered. Replaying partial sound
+        # after a transport failure would duplicate words.
+        for attempt in range(self.settings['retries'] + 1):
+            try:
+                complete, size, carry = False, 0, b''
+                async with httpx.AsyncClient(timeout=self.settings['timeout']) as client:
+                    async with client.stream('POST', API + '/interactions',
+                            headers={'x-goog-api-key': self.settings['key']}, json=payload) as response:
+                        if response.is_error:
+                            if response.status_code in (408, 429, 500, 502, 503, 504) and attempt < self.settings['retries']:
+                                await asyncio.sleep(.5 * (attempt + 1))
+                                continue
+                            body = bytearray()
+                            async for part in response.aiter_bytes():
+                                body.extend(part[:64000 - len(body)])
+                                if len(body) >= 64000: break
+                            _message(httpx.Response(response.status_code, content=bytes(body)), voice=True)
+                        with wave.open(str(pending), 'wb') as audio:
+                            audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(24000)
+                            async for event in events(response):
+                                kind = event.get('event_type')
+                                if kind == 'error':
+                                    raise SpeechError('Google 语音流中断，请重新播放。')
+                                if kind in ('interaction.completed', 'interaction.status_update'):
+                                    status = (event.get('interaction') or {}).get('status', event.get('status'))
+                                    if status == 'completed': complete = True
+                                    elif status in ('failed', 'cancelled', 'incomplete', 'budget_exceeded'):
+                                        raise SpeechError('Google 未完整生成朗读音频。')
+                                delta = event.get('delta') or {}
+                                if kind != 'step.delta' or delta.get('type') != 'audio': continue
+                                if complete: raise ValueError('audio after completion')
+                                mime = delta.get('mime_type', 'audio/l16')
+                                if mime.split(';')[0] != 'audio/l16': raise ValueError('unexpected audio format')
+                                raw = carry + base64.b64decode(delta['data'], validate=True)
+                                carry = raw[-1:] if len(raw) % 2 else b''
+                                raw = raw[:len(raw) - len(carry)]
+                                size += len(raw)
+                                if size + 44 > MAX_WAV: raise ValueError('audio too large')
+                                audio.writeframesraw(raw)
+                                for offset in range(0, len(raw), 24000):
+                                    self.on_audio('chunk', raw[offset:offset + 24000])
+                                    self.streamed = True
+                            if not complete or not size or carry:
+                                raise SpeechError('Google 语音流未完整结束，请重新播放。')
+                return
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.ProtocolError) as error:
+                if not self.streamed and attempt < self.settings['retries']:
+                    await asyncio.sleep(.5 * (attempt + 1))
+                    continue
+                raise SpeechError('无法连接 Google 语音服务。') from error
+            except (ValueError, KeyError, TypeError, binascii.Error, wave.Error) as error:
+                raise SpeechError('Google 语音流格式无效，请重新播放。') from error
+
     async def prepare(self, params, *, cancelled=lambda: False):
         result = await super().prepare(params, cancelled=cancelled)
-        return replace(result, engine='gemini')
+        return replace(result, engine='gemini', streamed=self.streamed)
 
 
 async def prepare_speech(params, data_dir, *, cancelled=lambda: False,
-                         config_dir=None, edge_engine=None):
+                         config_dir=None, edge_engine=None, on_audio=None):
     root = Path(config_dir) if config_dir is not None else storage_root()
     edge = edge_engine or SpeechEngine(data_dir)
     reason = ''
@@ -198,17 +259,18 @@ async def prepare_speech(params, data_dir, *, cancelled=lambda: False,
                 settings = read_settings(root)
                 voice = next(v for v in settings['voices'] if v['id'] == selected)
             try:
-                return await GeminiSpeechEngine(data_dir, settings, voice['voice_id']).prepare(
+                return await GeminiSpeechEngine(data_dir, settings, voice['voice_id'], on_audio).prepare(
                     params, cancelled=cancelled)
             except VoiceUnavailable:
                 await create_voice(selected, root, force=True)
                 settings = read_settings(root)
                 voice = next(v for v in settings['voices'] if v['id'] == selected)
-                return await GeminiSpeechEngine(data_dir, settings, voice['voice_id']).prepare(
+                return await GeminiSpeechEngine(data_dir, settings, voice['voice_id'], on_audio).prepare(
                     params, cancelled=cancelled)
         except asyncio.CancelledError:
             raise
         except (AppError, SpeechError, OSError, httpx.HTTPError) as error:
+            if on_audio is not None: on_audio('reset', b'')
             reason = str(error) if isinstance(error, (AppError, SpeechError)) else 'Gemini 服务不可用'
     if cancelled():
         raise asyncio.CancelledError()

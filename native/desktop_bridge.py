@@ -49,13 +49,13 @@ class Backend:
         for process in children:
             process.wait(timeout=5)
 
-    def request(self, message):
+    def request(self, message, on_progress=None):
         if not isinstance(message, dict) or type(message.get('id')) is not int:
             raise DesktopError('请求格式无效。')
         action, params = message.get('action'), message.get('params', {})
         if not isinstance(action, str) or action not in BACKEND_ACTIONS or not isinstance(params, dict):
             raise DesktopError('操作无效。')
-        payload = json.dumps({'action': action, 'params': params}, ensure_ascii=False).encode('utf-8')
+        payload = json.dumps({'action': action, 'params': params, 'stream': on_progress is not None}, ensure_ascii=False).encode('utf-8')
         if len(payload) > 100_000:
             raise DesktopError('输入过长。')
         env = dict(os.environ, HARU_DATA_DIR=str(self.data_dir), PYTHONIOENCODING='utf-8',
@@ -100,6 +100,9 @@ class Backend:
                 event = json.loads(line)
                 if not isinstance(event, dict):
                     raise DesktopError('本地服务返回格式无效。')
+                if event.get('event') == 'generation':
+                    if on_progress is not None: on_progress(event)
+                    continue
                 result = event
             process.wait()
             if timed_out.is_set():

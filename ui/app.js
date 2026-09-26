@@ -14,8 +14,17 @@ let aiConfig=null;
 let dailyWord=null, dailyWordLoading=false, dailyWordError='', dailyWordAdded=false;
 const drafts={grammar:'わたしは中国人です。',word:'',topic:'街角的咖啡店'};
 const pending=new Map();let reqId=0;
-window.haruResolve=(id,result)=>{const p=pending.get(id);if(!p)return;clearTimeout(p.timer);pending.delete(id);result.ok?p.resolve(result.data):p.reject(new Error(result.error||'操作未完成'));};
-function rpc(action,params={}){if(distributionLocked)return Promise.reject(new Error('正在准备更新或已完成导入，请重新打开 Haru。'));return new Promise((resolve,reject)=>{const id=++reqId;if(haruHasNative()){const timer=setTimeout(()=>{pending.delete(id);reject(new Error('操作超时，请稍后重试。'));},610000);pending.set(id,{resolve,reject,timer});haruPostMessage({id,action,params});}else if(location.protocol.startsWith('http')){fetch('/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,params})}).then(r=>r.json()).then(r=>r.ok?resolve(r.data):reject(new Error(r.error))).catch(()=>reject(new Error('本地预览连接失败。')));}else reject(new Error('请通过 start.command（macOS）或 start.cmd（Windows）打开应用。'));});}
+window.haruResolve=(id,result)=>{const p=pending.get(id);if(!p)return;clearTimeout(p.timer);pending.delete(id);window.haruGenerationDone?.(id);result.ok?p.resolve(result.data):p.reject(new Error(result.error||'操作未完成'));};
+window.haruProgress=(id,event)=>{
+ const request=pending.get(id);if(!request)return;
+ window.haruGenerationEvent?.(id,event,request);
+ if(event.event==='audio'&&request.action==='speak'&&page==='immersion'){
+  // Later chunks only fill the native queue; they do not resume paused audio.
+  if(event.phase==='chunk'&&storyPlayback==='preparing')setStoryPlayback('playing');
+  if(event.phase==='reset')setStoryPlayback('preparing');
+ }
+};
+function rpc(action,params={}){if(distributionLocked)return Promise.reject(new Error('正在准备更新或已完成导入，请重新打开 Haru。'));return new Promise((resolve,reject)=>{const id=++reqId;if(haruHasNative()){const timer=setTimeout(()=>{pending.delete(id);window.haruGenerationDone?.(id);reject(new Error('操作超时，请稍后重试。'));},610000);pending.set(id,{resolve,reject,timer,action,page,nav:navigationRun});haruPostMessage({id,action,params});}else if(location.protocol.startsWith('http')){fetch('/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,params})}).then(r=>r.json()).then(r=>r.ok?resolve(r.data):reject(new Error(r.error))).catch(()=>reject(new Error('本地预览连接失败。')));}else reject(new Error('请通过 start.command（macOS）或 start.cmd（Windows）打开应用。'));});}
 function toast(message,error=false){const t=$('#toast');t.textContent=message;t.className='show'+(error?' error':'');clearTimeout(t.timer);t.timer=setTimeout(()=>t.className='',error?7500:3500);}
 async function run(label,fn,button){if(button?.disabled)return;busyCount++;$('#busy-label').textContent=label;$('#busy').hidden=false;if(button)button.disabled=true;try{return await fn();}catch(e){toast(e.message,true);}finally{if(button)button.disabled=false;busyCount--;if(!busyCount)$('#busy').hidden=true;}}
 async function refresh(){const request=++refreshRun;const result=await rpc('bootstrap',{include_knowledge:page==='progress'});if(request!==refreshRun)return state;state=result;if(!catalog||catalog.stage===state.progression.stage)catalog=state.curriculum;$('#profile-name').textContent=state.profile.name;document.body.classList.toggle('hide-romaji',!state.profile.romaji);return state;}
@@ -38,7 +47,7 @@ const ex=x=>`<div class="example"><div><p class="jp" lang="ja">${japanese(x.jp)}
 const empty=(name,desc,action='')=>`<div class="empty">${icon('leaf')}<h3>${name}</h3><p>${desc}</p>${action}</div>`;
 function nav(){return navItems.map(([id,i,t])=>`<button class="nav-item ${page===id?'active':''}" data-nav="${id}">${icon(i)}${t}${id==='cards'&&state?.stats.due?`<span class="nav-count">${state.stats.due}</span>`:''}</button>`).join('');}
 async function navigate(to){if(!navItems.some(n=>n[0]===to)&&to!=='settings')to='home';const request=++navigationRun;page=to;if(to==='settings'){aiConfig=null;speechSettings=null};if(to!=='cards')cardLoadRun++;if(to!=='progress')progressLoadRun++;$('#nav').innerHTML=nav();$('#settings-nav').classList.toggle('active',page==='settings');$('#page-crumb').textContent=navItems.find(n=>n[0]===to)?.[2]||'偏好设置';render();window.scrollTo(0,0);if(to==='settings'){await loadAIConfig();await loadSpeechSettings();await loadDistributionInfo();}if(to==='lessons'&&selectedLessonNo===null&&!lesson&&!checkpoint)await openLesson(state.progression.next_lesson||catalog.courses[0].lesson_no);if(to==='cards')await run('正在打开你的卡片…',loadCards);if(to==='grammar_library'||to==='jlpt')await loadStudy(to);if(to==='progress'){const read=++progressLoadRun;await refresh();if(request===navigationRun&&read===progressLoadRun&&page==='progress')render();}}
-function render(){if(!state)return;const f={home:homeView,lessons:lessonsView,cards:cardsView,grammar:grammarView,grammar_library:grammarLibraryView,jlpt:jlptView,progress:progressView,immersion:immersionView,settings:settingsView};$('#main').innerHTML=f[page]();enhanceLearning();syncCourseSelection();}
+function render(){if(!state)return;const f={home:homeView,lessons:lessonsView,cards:cardsView,grammar:grammarView,grammar_library:grammarLibraryView,jlpt:jlptView,progress:progressView,immersion:immersionView,settings:settingsView};$('#main').innerHTML=f[page]();enhanceLearning();syncCourseSelection();window.haruGenerationPaint?.();}
 function dailyWordView(){
  const header='<div class="card-title"><h3>今日的一点日语</h3><span>DAILY WORD</span></div>';
  if(dailyWordLoading)return header+'<p class="word-meaning" role="status">AI 正在准备这次的一点日语…</p>';
@@ -190,7 +199,7 @@ function aiProviderView(c,index){
  </div></div>
  <details class="ai-advanced"><summary><span>模型参数<small>思考、输出与连接设置</small></span><span class="ai-chevron" aria-hidden="true">⌄</span></summary><div class="ai-advanced-body">
  <div class="ai-parameter-group"><h4>生成偏好</h4><div class="ai-fields">
- <label>思考模式${aiSelect('reasoning',c.reasoning==='auto'?'omit':c.reasoning,[['omit','服务商默认'],['off','关闭思考'],['low','低 · low'],['medium','中 · medium'],['high','高 · high'],['max','最高 · max'],['custom','自定义']])}</label>
+ <div class="ai-task-policy"><label class="ai-choice"><input type="checkbox" name="task_reasoning" ${c.task_reasoning!==false?'checked':''}><span>按任务优化思考（推荐）</span></label><p class="hint">词卡、查词、注音关闭思考；课程、故事、拆解、命题使用低强度；JLPT 审题保留高强度。关闭后使用下方统一设置。服务商需支持思考强度设置。</p></div><label>统一思考模式${aiSelect('reasoning',c.reasoning==='auto'?'omit':c.reasoning,[['omit','服务商默认'],['off','关闭思考'],['low','低 · low'],['medium','中 · medium'],['high','高 · high'],['max','最高 · max'],['custom','自定义']])}</label>
  <label class="ai-reasoning-custom ${c.reasoning==='custom'?'':'is-hidden'}">自定义思考强度<input name="reasoning_custom" value="${esc(c.reasoning_custom||'')}" maxlength="80" placeholder="例如：xhigh" pattern="[A-Za-z0-9._-]+" ${c.reasoning==='custom'?'required':''} spellcheck="false"></label>
  ${number('max_tokens','输出 token 上限',1,131072,1,'沿用任务默认')}
  ${number('temperature','温度',0,2,'any','沿用任务默认')}${number('top_p','Top P',0,1,'any','不指定')}
@@ -208,13 +217,13 @@ function aiConfigView(){
  <details class="ai-defaults"><summary>默认调用参数与覆盖规则</summary><div class="ai-defaults-body">
  <div class="ai-table-wrap"><table><thead><tr><th>功能</th><th>temperature</th><th>max_tokens</th></tr></thead><tbody>
  <tr><td>普通教学、词卡、注音、周测、连接测试</td><td>0.55</td><td>5000</td></tr>
- <tr><td>沉浸故事</td><td>0.55</td><td>10000</td></tr>
- <tr><td>每日课程</td><td>0.55</td><td>10000</td></tr>
+ <tr><td>沉浸故事</td><td>0.55</td><td>16000</td></tr>
+ <tr><td>每日课程</td><td>0.55</td><td>24000</td></tr>
  <tr><td>JLPT 命题</td><td>0.35</td><td>8000</td></tr>
  <tr><td>JLPT 分段审查、解析修订</td><td>0.1</td><td>8000</td></tr>
  <tr><td>JLPT 整卷审查</td><td>0.1</td><td>12000</td></tr>
  </tbody></table></div>
- <ul><li>明确填写温度：所有功能统一使用该温度。</li><li>明确填写输出上限：所有功能统一使用该 <code>max_tokens</code>。</li><li>留空：采用表中的任务默认值。</li><li>设置思考模式：所有功能统一发送对应的 <code>reasoning_effort</code>。</li><li><code>Top P</code>、不发送温度、输出上限由服务商决定，也会统一应用于所有功能。</li></ul>
+ <ul><li>明确填写温度：所有功能统一使用该温度。</li><li>明确填写输出上限：所有功能统一使用该 <code>max_tokens</code>。</li><li>留空：采用表中的任务默认值。</li><li>启用按任务优化时，思考强度按用途选择；关闭后，所有功能统一发送所选的 <code>reasoning_effort</code>。</li><li><code>Top P</code>、不发送温度、输出上限由服务商决定，也会统一应用于所有功能。</li></ul>
  </div></details>
  <div class="ai-list-heading"><div><strong>服务商与模型</strong><span class="ai-count">${aiConfig.providers.length}</span></div><button class="btn small soft" type="button" data-ai-add ${aiConfig.providers.length>=20?'disabled':''}>＋ 添加配置</button></div>
  <p class="ai-settings-description">所有 AI 功能使用默认配置，可为同一服务商添加多个模型。</p>
@@ -230,7 +239,7 @@ function collectAIConfig(form){
   for(const name of ['temperature','top_p','max_tokens','timeout','retries']){
    const v=section.querySelector(`[name="${name}"]`).value;row[name]=v===''?null:Number(v);
   }
-  for(const name of ['omit_temperature','omit_token_limit'])row[name]=section.querySelector(`[name="${name}"]`).checked;
+  for(const name of ['omit_temperature','omit_token_limit','task_reasoning'])row[name]=section.querySelector(`[name="${name}"]`).checked;
   row.key_configured=aiConfig.providers.find(p=>p.id===row.id)?.key_configured||false;
   return row;
  });
@@ -255,7 +264,7 @@ document.addEventListener('click',event=>{
  const form=button.closest('form');if(!form||form.querySelector('fieldset').disabled)return;
  Object.assign(aiConfig,collectAIConfig(form));
  if(button.hasAttribute('data-ai-add')){
-  aiConfig.providers.push({id:'provider_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8),name:'新服务商',base:'https://api.openai.com/v1',key:'',model:'',timeout:60,retries:1,reasoning:'omit',reasoning_custom:''});
+  aiConfig.providers.push({id:'provider_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8),name:'新服务商',base:'https://api.openai.com/v1',key:'',model:'',timeout:60,retries:1,task_reasoning:true,reasoning:'omit',reasoning_custom:''});
  }else{
   aiConfig.providers=aiConfig.providers.filter(p=>p.id!==button.dataset.aiRemove);
   if(!aiConfig.providers.some(p=>p.id===aiConfig.active))aiConfig.active=aiConfig.providers[0].id;
@@ -341,7 +350,15 @@ async function speakText(text){
  const request=++audioRequest;const track=page==='immersion';setStoryPlayback(track?'preparing':'idle');
  if(!haruHasNative()){setStoryPlayback('idle');toast('日语朗读请在 Haru 桌面 App 中使用。',true);return;}
  const speed=state?.profile?.speech_rate??1.0;
- try{const result=await rpc('speak',{text,rate:0.42*speed});if(request===audioRequest)setStoryPlayback(track&&result?.engine?'playing':'idle');if(result?.fallback)toast('Gemini 朗读失败（'+result.fallback+'），已使用 Edge TTS。');return result;}catch(e){if(request===audioRequest)setStoryPlayback('idle');toast(e.message,true);}
+ try{
+  const result=await rpc('speak',{text,rate:0.42*speed});
+  if(request===audioRequest){
+   if(!track||!result?.engine)setStoryPlayback('idle');
+   else if(storyPlayback==='preparing')setStoryPlayback('playing');
+  }
+  if(result?.fallback)toast('Gemini 朗读失败（'+result.fallback+'），已使用 Edge TTS。');
+  return result;
+ }catch(e){if(request===audioRequest)setStoryPlayback('idle');toast(e.message,true);}
 }
 window.haruRecordingStopped=()=>{record=false;if($('#record-btn')){$('#record-btn').innerHTML=icon('mic')+' 录下我的跟读';$('#record-btn').classList.remove('recording');}toast('录音已保存（最长60秒）。');};
 $('#settings-nav').innerHTML=icon('settings')+'偏好设置';

@@ -9,6 +9,7 @@ from desktop_bridge import DesktopError
 from app_paths import storage_root
 from speech import SpeechEngine, SpeechError, normalize
 from speech_google import prepare_speech
+from windows_pcm import PCMPlayer
 
 
 @dataclass
@@ -16,6 +17,7 @@ class SpeechRequest:
     cancelled: threading.Event = field(default_factory=threading.Event)
     loop: object = None
     task: object = None
+    progress: object = None
 
 
 class WindowsAudio:
@@ -35,18 +37,23 @@ class WindowsAudio:
                                    synthesis_timeout=synthesis_timeout)
         self._speech_request = None
         self._transient_audio = None
+        self.pcm = None
 
     def _command(self, text, *, optional=False):
         if self.mci(text, None, 0, None) and not optional:
             raise DesktopError('音频操作失败，请检查麦克风权限、音频设备或文件格式。')
 
     def _stop_audio(self):
+        if self.pcm is not None:
+            self.pcm.stop()
+            self.pcm = None
         self._command('close haru_play', optional=True)
         if self._transient_audio is not None:
             self._remove_transient(self._transient_audio)
             self._transient_audio = None
 
     def _audio_mode(self):
+        if self.pcm is not None: return self.pcm.state
         mode = ctypes.create_unicode_buffer(32)
         if self.mci('status haru_play mode', mode, len(mode), None):
             return 'idle'
@@ -79,17 +86,27 @@ class WindowsAudio:
                 raise asyncio.CancelledError()
             request.loop = asyncio.get_running_loop()
             request.task = asyncio.current_task()
+        def on_audio(phase, raw):
+            with self.lock:
+                if not self._current(request): raise asyncio.CancelledError()
+                if phase == 'reset':
+                    self._stop_audio()
+                else:
+                    if self.pcm is None: self.pcm = PCMPlayer()
+                    self.pcm.append(raw)
+                if request.progress is not None:
+                    request.progress({'event': 'audio', 'phase': phase})
         try:
             return await prepare_speech(params, self.data_dir,
                                         cancelled=request.cancelled.is_set,
                                         config_dir=storage_root(),
-                                        edge_engine=self.engine)
+                                        edge_engine=self.engine, on_audio=on_audio)
         finally:
             with self.lock:
                 request.loop = request.task = None
 
-    def _edge_speak(self, params):
-        request = SpeechRequest()
+    def _edge_speak(self, params, on_progress=None):
+        request = SpeechRequest(progress=on_progress)
         audio = None
         played = False
         outcome = {}
@@ -107,7 +124,10 @@ class WindowsAudio:
                     if audio.transient:
                         self._transient_audio = audio.path
                     try:
-                        self._play(audio.path)
+                        if getattr(audio, 'streamed', False):
+                            self.pcm.finish()
+                        else:
+                            self._play(audio.path)
                     except DesktopError:
                         self._stop_audio()
                         raise
@@ -119,6 +139,7 @@ class WindowsAudio:
         except SpeechError as error:
             with self.lock:
                 if self._current(request):
+                    self._stop_audio()
                     raise DesktopError(str(error)) from error
         finally:
             if audio is not None and audio.transient and not played:
@@ -128,13 +149,13 @@ class WindowsAudio:
                     self._speech_request = None
         return outcome
 
-    def perform(self, action, params):
+    def perform(self, action, params, on_progress=None):
         if action == 'speak':
             try:
                 normalize(params)
             except SpeechError as error:
                 raise DesktopError(str(error)) from error
-            return self._edge_speak(params)
+            return self._edge_speak(params, on_progress)
         with self.lock:
             if self.closed:
                 raise DesktopError('应用正在退出。')
@@ -142,6 +163,9 @@ class WindowsAudio:
                 self._cancel_speech()
                 self._stop_audio()
             elif action == 'audio_toggle_pause':
+                if self.pcm is not None:
+                    self.pcm.toggle_pause()
+                    return {'state': self.pcm.state}
                 mode = self._audio_mode()
                 if mode == 'playing':
                     self._command('pause haru_play')

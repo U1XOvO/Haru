@@ -333,3 +333,8 @@ input[type="range"]{
 .speech-actions{justify-content:flex-end;border-top:1px solid var(--line);padding-top:18px}
 #speech-preview-status:not(:empty){margin-top:14px;padding:10px 12px;border-radius:8px;background:#edf2f9;overflow-wrap:anywhere}
 @media(max-width:700px){#speech-settings{padding:17px}.speech-options,.speech-voice-fields{grid-template-columns:minmax(0,1fr)}.speech-wide{grid-column:auto}.speech-actions{justify-content:flex-start}}
+
+.generation-preview{margin-bottom:20px;border-left:3px solid var(--accent,#8d8aaf)}
+.generation-preview-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:45vh;overflow-y:auto;line-height:1.8}
+
+.ai-task-policy{grid-column:1 / -1}.ai-task-policy .hint{margin:8px 0 0}
